@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlueTalk — Stealth P2P Chat</title>
+  <meta name="description" content="Peer-to-peer messaging built for silence. No servers, no accounts, no traces.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='10' fill='%231B6FFF'/><circle cx='16' cy='16' r='4' fill='white'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:   #1B6FFF;
+      --dim:    #EBF1FF;
+      --black:  #0A0A0A;
+      --mid:    #6B7280;
+      --light:  #F7F8FB;
+      --border: #E5E7EB;
+      --white:  #FFFFFF;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: var(--white);
+      color: var(--black);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ───────────────────────────────── */
+
+    .nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      height: 60px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 40px;
+      background: rgba(255,255,255,0.82);
+      backdrop-filter: blur(18px) saturate(180%);
+      -webkit-backdrop-filter: blur(18px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-brand {
+      display: flex; align-items: center; gap: 9px;
+      text-decoration: none; color: var(--black);
+    }
+    .nav-dot { width: 8px; height: 8px; background: var(--blue); border-radius: 50%; }
+    .nav-wordmark {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 16px; font-weight: 700; letter-spacing: -0.01em;
+    }
+
+    .nav-links { display: flex; gap: 2px; }
+    .nav-link {
+      display: flex; align-items: center; gap: 5px;
+      padding: 7px 14px;
+      font-size: 13.5px; font-weight: 400; color: var(--mid);
+      text-decoration: none; border-radius: 8px;
+      transition: color .15s, background .15s;
+    }
+    .nav-link svg {
+      width: 14px; height: 14px; stroke: currentColor; fill: none;
+      stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round;
+      flex-shrink: 0;
+    }
+    .nav-link:hover { color: var(--black); background: var(--light); }
+
+    .nav-gh {
+      display: flex; align-items: center; gap: 7px;
+      padding: 8px 16px;
+      background: var(--black); color: white;
+      border-radius: 9px; font-size: 13px; font-weight: 500;
+      text-decoration: none; transition: background .2s;
+    }
+    .nav-gh svg { width: 15px; height: 15px; fill: currentColor; }
+    .nav-gh:hover { background: var(--blue); }
+
+    /* ── HERO ──────────────────────────────── */
+
+    .hero {
+      position: relative; min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 100px 24px 80px; text-align: center; overflow: hidden;
+    }
+
+    #hero-canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; pointer-events: none;
+    }
+
+    .hero > * { position: relative; }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 14px 5px 10px;
+      background: var(--dim); color: var(--blue);
+      border-radius: 100px; font-size: 11px; font-weight: 600;
+      letter-spacing: .07em; text-transform: uppercase;
+      margin-bottom: 26px;
+      animation: rise .55s cubic-bezier(.34,1.56,.64,1) both;
+    }
+    .badge-pulse {
+      width: 7px; height: 7px; background: var(--blue);
+      border-radius: 50%; flex-shrink: 0;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: .5; transform: scale(.75); }
+    }
+
+    .hero-title {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: clamp(72px, 11vw, 128px);
+      font-weight: 800; letter-spacing: -.045em; line-height: .92;
+      color: var(--black); margin-bottom: 20px;
+      animation: rise .55s cubic-bezier(.34,1.56,.64,1) .08s both;
+    }
+    .hero-title em { color: var(--blue); font-style: normal; }
+
+    .hero-sub {
+      font-size: 17px; font-weight: 300; color: var(--mid);
+      max-width: 420px; line-height: 1.65; margin-bottom: 0;
+      animation: rise .55s cubic-bezier(.34,1.56,.64,1) .16s both;
+    }
+
+    /* P2P connection visual */
+    .peer-vis {
+      display: flex; align-items: center; gap: 0;
+      margin: 28px 0 38px;
+      animation: rise .55s cubic-bezier(.34,1.56,.64,1) .24s both;
+    }
+    .peer-node {
+      display: flex; align-items: center; gap: 7px;
+      padding: 8px 14px;
+      background: var(--white); border: 1.5px solid var(--border);
+      border-radius: 10px; font-size: 12px; font-weight: 500; color: var(--mid);
+      white-space: nowrap;
+    }
+    .peer-node-dot { width: 7px; height: 7px; background: #22C55E; border-radius: 50%; }
+    .peer-wire {
+      position: relative; width: 96px; height: 36px;
+      display: flex; align-items: center;
+    }
+    .peer-line {
+      width: 100%; height: 1.5px;
+      background: linear-gradient(90deg, var(--border), var(--blue), var(--border));
+      position: relative; overflow: hidden;
+    }
+    .peer-line::after {
+      content: '';
+      position: absolute; top: 0; left: -35%; width: 35%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.9), transparent);
+      animation: datapulse 2.4s ease-in-out infinite;
+    }
+    @keyframes datapulse {
+      0%   { left: -35%; }
+      100% { left: 130%; }
+    }
+    .peer-lock {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      width: 26px; height: 26px;
+      background: var(--white); border: 1.5px solid var(--dim);
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; z-index: 1;
+    }
+    .peer-lock svg {
+      width: 11px; height: 11px; stroke: var(--blue); fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    .hero-actions {
+      display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+      animation: rise .55s cubic-bezier(.34,1.56,.64,1) .32s both;
+    }
+
+    .btn-primary {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 13px 28px;
+      background: var(--blue); color: white;
+      border-radius: 11px; font-size: 14.5px; font-weight: 500;
+      text-decoration: none;
+      box-shadow: 0 2px 16px rgba(27,111,255,.32);
+      transition: background .2s, transform .15s, box-shadow .2s;
+    }
+    .btn-primary svg {
+      width: 16px; height: 16px; stroke: currentColor; fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .btn-primary:hover { background: #0057E8; transform: translateY(-2px); box-shadow: 0 6px 24px rgba(27,111,255,.4); }
+
+    .btn-ghost {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 13px 28px;
+      background: transparent; color: var(--black);
+      border: 1.5px solid var(--border); border-radius: 11px;
+      font-size: 14.5px; font-weight: 500; text-decoration: none;
+      transition: border-color .2s, background .2s;
+    }
+    .btn-ghost svg {
+      width: 16px; height: 16px; stroke: currentColor; fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .btn-ghost:hover { border-color: #C5D2E8; background: var(--light); }
+
+    /* ── SECTION ───────────────────────────── */
+
+    .section { padding: 96px 24px; }
+    .section--alt {
+      background: var(--light);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sec-head { text-align: center; margin-bottom: 52px; }
+    .sec-eye {
+      display: inline-block;
+      font-size: 10.5px; font-weight: 600;
+      letter-spacing: .12em; text-transform: uppercase;
+      color: var(--blue); margin-bottom: 10px;
+    }
+    .sec-title {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: clamp(30px, 4vw, 46px);
+      font-weight: 800; letter-spacing: -.035em; color: var(--black);
+    }
+
+    /* ── FEATURES ──────────────────────────── */
+
+    .feat-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 12px; max-width: 880px; margin: 0 auto;
+    }
+    .feat-card {
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
+      padding: 28px 14px 22px;
+      background: var(--white); border: 1.5px solid var(--border);
+      border-radius: 14px; cursor: default; position: relative;
+      transition: border-color .2s, transform .22s, box-shadow .22s;
+    }
+    .feat-card::after {
+      content: ''; position: absolute; inset: -1px;
+      border-radius: 15px;
+      background: linear-gradient(140deg, rgba(27,111,255,.09), transparent 55%);
+      opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }
+    .feat-card:hover { border-color: rgba(27,111,255,.38); transform: translateY(-3px); box-shadow: 0 8px 28px rgba(0,0,0,.07); }
+    .feat-card:hover::after { opacity: 1; }
+
+    .feat-icon {
+      width: 48px; height: 48px; background: var(--light);
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .2s; position: relative; z-index: 1;
+    }
+    .feat-card:hover .feat-icon { background: var(--dim); }
+    .feat-icon svg {
+      width: 20px; height: 20px; stroke: #9CA3AF; fill: none;
+      stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;
+      transition: stroke .2s;
+    }
+    .feat-card:hover .feat-icon svg { stroke: var(--blue); }
+
+    .feat-label {
+      font-size: 12px; font-weight: 500; color: var(--black);
+      text-align: center; position: relative; z-index: 1;
+    }
+
+    /* ── DOWNLOAD ──────────────────────────── */
+
+    .dl-wrap { max-width: 560px; margin: 0 auto; }
+    .dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    .dl-card {
+      display: flex; flex-direction: column; align-items: center; gap: 13px;
+      padding: 36px 22px 28px;
+      background: var(--white); border: 1.5px solid var(--border);
+      border-radius: 18px; text-decoration: none; position: relative; overflow: hidden;
+      transition: border-color .22s, transform .22s, box-shadow .22s;
+    }
+    .dl-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0;
+      height: 3px; background: var(--blue);
+      transform: scaleX(0); transform-origin: left;
+      transition: transform .28s cubic-bezier(.4,0,.2,1);
+    }
+    .dl-card:hover { border-color: rgba(27,111,255,.32); transform: translateY(-4px); box-shadow: 0 12px 36px rgba(27,111,255,.1); }
+    .dl-card:hover::before { transform: scaleX(1); }
+
+    .dl-icon {
+      width: 64px; height: 64px; background: var(--dim);
+      border-radius: 18px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .dl-icon svg {
+      width: 28px; height: 28px; stroke: var(--blue); fill: none;
+      stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .dl-name {
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 18px; font-weight: 700; color: var(--black);
+    }
+    .dl-meta {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11.5px; color: var(--mid);
+    }
+    .dl-meta svg {
+      width: 11px; height: 11px; stroke: currentColor; fill: none;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .dl-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin-top: 4px; padding: 9px 18px;
+      background: var(--black); color: white;
+      border-radius: 8px; font-size: 12.5px; font-weight: 500;
+      transition: background .2s;
+    }
+    .dl-btn svg {
+      width: 13px; height: 13px; stroke: currentColor; fill: none;
+      stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
+    }
+    .dl-card:hover .dl-btn { background: var(--blue); }
+
+    /* ── FOOTER ────────────────────────────── */
+
+    .footer {
+      padding: 28px 40px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-brand {
+      display: flex; align-items: center; gap: 8px;
+      font-family: 'Bricolage Grotesque', sans-serif;
+      font-size: 14px; font-weight: 700; color: var(--black);
+    }
+    .footer-dot { width: 7px; height: 7px; background: var(--blue); border-radius: 50%; }
+    .footer-right { display: flex; align-items: center; gap: 22px; }
+    .footer-link {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 13px; color: var(--mid); text-decoration: none;
+      transition: color .15s;
+    }
+    .footer-link svg { width: 14px; height: 14px; fill: currentColor; }
+    .footer-link:hover { color: var(--black); }
+    .footer-copy { font-size: 12px; color: #B0B7C3; }
+
+    /* ── ANIM ──────────────────────────────── */
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(18px) scale(.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .reveal {
+      opacity: 0; transform: translateY(14px);
+      transition: opacity .5s ease, transform .5s ease;
+    }
+    .reveal.in { opacity: 1; transform: translateY(0); }
+
+    /* ── RESPONSIVE ────────────────────────── */
+
+    @media (max-width: 780px) {
+      .nav { padding: 0 20px; }
+      .nav-links { display: none; }
+      .feat-grid { grid-template-columns: repeat(2, 1fr); }
+      .dl-grid { grid-template-columns: 1fr; max-width: 300px; margin: 0 auto; }
+      .footer { padding: 24px 20px; }
+    }
+
+    @media (max-width: 460px) {
+      .nav-gh span { display: none; }
+      .peer-vis { display: none; }
+      .hero-title { font-size: 60px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── NAVIGATION ──────────────────────────────────── -->
+  <nav class="nav">
+    <a href="#" class="nav-brand">
+      <div class="nav-dot"></div>
+      <span class="nav-wordmark">BlueTalk</span>
+    </a>
+
+    <div class="nav-links">
+      <a href="#features" class="nav-link">
+        <!-- grid icon -->
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Features
+      </a>
+      <a href="#download" class="nav-link">
+        <!-- download icon -->
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </a>
+    </div>
+
+    <a href="https://github.com/Henny263462/bluetalk" target="_blank" rel="noopener" class="nav-gh">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg>
+      <span>GitHub</span>
+    </a>
+  </nav>
+
+  <!-- ─── HERO ─────────────────────────────────────────── -->
+  <section class="hero">
+    <canvas id="hero-canvas"></canvas>
+
+    <div class="hero-badge">
+      <div class="badge-pulse"></div>
+      Stealth P2P Messaging
+    </div>
+
+    <h1 class="hero-title">Blue<em>Talk</em></h1>
+
+    <p class="hero-sub">Peer-to-peer messaging built for silence.<br>No servers. No accounts. No traces.</p>
+
+    <!-- P2P connection illustration -->
+    <div class="peer-vis">
+      <div class="peer-node">
+        <div class="peer-node-dot"></div>
+        Peer A
+      </div>
+      <div class="peer-wire">
+        <div class="peer-line"></div>
+        <div class="peer-lock">
+          <!-- lock icon -->
+          <svg viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+      </div>
+      <div class="peer-node">
+        <div class="peer-node-dot"></div>
+        Peer B
+      </div>
+    </div>
+
+    <div class="hero-actions">
+      <a href="#download" class="btn-primary">
+        <!-- download arrow icon -->
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </a>
+      <a href="#features" class="btn-ghost">
+        <!-- info icon -->
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        See Features
+      </a>
+    </div>
+  </section>
+
+  <!-- ─── FEATURES ─────────────────────────────────────── -->
+  <section id="features" class="section">
+    <div class="sec-head reveal">
+      <div class="sec-eye">Capabilities</div>
+      <h2 class="sec-title">Built different</h2>
+    </div>
+
+    <div class="feat-grid">
+
+      <!-- Peer-to-Peer -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <span class="feat-label">Peer-to-Peer</span>
+      </div>
+
+      <!-- No Cloud -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><line x1="2" y1="2" x2="22" y2="22"/><path d="M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193"/><path d="M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"/></svg>
+        </div>
+        <span class="feat-label">No Cloud</span>
+      </div>
+
+      <!-- Encrypted -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>
+        </div>
+        <span class="feat-label">Encrypted</span>
+      </div>
+
+      <!-- Stealth Mode -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </div>
+        <span class="feat-label">Stealth Mode</span>
+      </div>
+
+      <!-- Any Network -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+        </div>
+        <span class="feat-label">Any Network</span>
+      </div>
+
+      <!-- No Account -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><line x1="17" y1="8" x2="23" y2="14"/><line x1="23" y1="8" x2="17" y2="14"/></svg>
+        </div>
+        <span class="feat-label">No Account</span>
+      </div>
+
+      <!-- Auto Updates -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </div>
+        <span class="feat-label">Auto Updates</span>
+      </div>
+
+      <!-- Windows Native -->
+      <div class="feat-card reveal">
+        <div class="feat-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <span class="feat-label">Windows Native</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ─── DOWNLOAD ──────────────────────────────────────── -->
+  <section id="download" class="section section--alt">
+    <div class="sec-head reveal">
+      <div class="sec-eye">Get it now</div>
+      <h2 class="sec-title">Download</h2>
+    </div>
+
+    <div class="dl-wrap">
+      <div class="dl-grid">
+
+        <!-- Installer -->
+        <a href="https://github.com/Henny263462/bluetalk/releases/latest" target="_blank" rel="noopener" class="dl-card reveal">
+          <div class="dl-icon">
+            <!-- package/box icon -->
+            <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+          </div>
+          <div class="dl-name">Installer</div>
+          <div class="dl-meta">
+            <!-- file icon -->
+            <svg viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Setup · Windows · .exe
+          </div>
+          <div class="dl-btn">
+            <!-- arrow down icon -->
+            <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            Download
+          </div>
+        </a>
+
+        <!-- Portable -->
+        <a href="https://github.com/Henny263462/bluetalk/releases/latest" target="_blank" rel="noopener" class="dl-card reveal">
+          <div class="dl-icon">
+            <!-- smartphone/usb icon -->
+            <svg viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+          </div>
+          <div class="dl-name">Portable</div>
+          <div class="dl-meta">
+            <svg viewBox="0 0 24 24"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+            No install · .exe
+          </div>
+          <div class="dl-btn">
+            <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            Download
+          </div>
+        </a>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── FOOTER ────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer-brand">
+      <div class="footer-dot"></div>
+      BlueTalk
+    </div>
+    <div class="footer-right">
+      <a href="https://github.com/Henny263462/bluetalk" target="_blank" rel="noopener" class="footer-link">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z"/></svg>
+        GitHub
+      </a>
+      <a href="https://github.com/Henny263462/bluetalk/releases" target="_blank" rel="noopener" class="footer-link">
+        Releases
+      </a>
+      <span class="footer-copy">© 2025 BlueTalk</span>
+    </div>
+  </footer>
+
+  <script>
+    // ── CANVAS: P2P NETWORK BACKGROUND ───────────────────
+    (function () {
+      const canvas = document.getElementById('hero-canvas');
+      const ctx    = canvas.getContext('2d');
+      let W, H, dpr, nodes, raf;
+
+      function resize() {
+        dpr    = window.devicePixelRatio || 1;
+        W      = canvas.offsetWidth;
+        H      = canvas.offsetHeight;
+        canvas.width  = W * dpr;
+        canvas.height = H * dpr;
+        ctx.scale(dpr, dpr);
+        nodes = Array.from({ length: 13 }, () => ({
+          x:  Math.random() * W,
+          y:  Math.random() * H,
+          vx: (Math.random() - 0.5) * 0.38,
+          vy: (Math.random() - 0.5) * 0.38,
+          r:  Math.random() * 1.4 + 0.8,
+        }));
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        // connections
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const dx   = nodes[i].x - nodes[j].x;
+            const dy   = nodes[i].y - nodes[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 170) {
+              const a = (1 - dist / 170) * 0.11;
+              ctx.beginPath();
+              ctx.strokeStyle = `rgba(27,111,255,${a})`;
+              ctx.lineWidth = 0.7;
+              ctx.moveTo(nodes[i].x, nodes[i].y);
+              ctx.lineTo(nodes[j].x, nodes[j].y);
+              ctx.stroke();
+            }
+          }
+        }
+
+        // dots
+        nodes.forEach(n => {
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(27,111,255,0.22)';
+          ctx.fill();
+        });
+      }
+
+      function tick() {
+        nodes.forEach(n => {
+          n.x += n.vx;
+          n.y += n.vy;
+          if (n.x < 0 || n.x > W) n.vx *= -1;
+          if (n.y < 0 || n.y > H) n.vy *= -1;
+        });
+        draw();
+        raf = requestAnimationFrame(tick);
+      }
+
+      window.addEventListener('resize', () => { cancelAnimationFrame(raf); resize(); tick(); });
+      resize();
+      tick();
+    })();
+
+    // ── SCROLL REVEAL ─────────────────────────────────────
+    (function () {
+      // stagger feature cards
+      document.querySelectorAll('.feat-grid .reveal').forEach((el, i) => {
+        el.style.transitionDelay = (i * 0.07) + 's';
+      });
+      // stagger download cards
+      document.querySelectorAll('.dl-grid .reveal').forEach((el, i) => {
+        el.style.transitionDelay = (i * 0.12) + 's';
+      });
+
+      const io = new IntersectionObserver(
+        entries => entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('in'); }),
+        { threshold: 0.1, rootMargin: '0px 0px -24px 0px' }
+      );
+      document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+    })();
+  </script>
+
+</body>
+</html>

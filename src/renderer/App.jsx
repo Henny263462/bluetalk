@@ -78,6 +78,8 @@ export default function App() {
     peerPort: 0,
     peerPorts: [],
     apiPort: 19876,
+    autoUpdateEnabled: true,
+    autoDownloadUpdates: true,
     minimizeToTray: true,
     theme: 'dark',
   });

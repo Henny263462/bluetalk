@@ -151,6 +151,8 @@ class APIServer {
             peerPort: this.store.get('settings.peerPort', 0),
             peerPorts: this.store.get('settings.peerPorts', []),
             apiPort: this.store.get('settings.apiPort', 19876),
+            autoUpdateEnabled: this.store.get('settings.autoUpdateEnabled', true),
+            autoDownloadUpdates: this.store.get('settings.autoDownloadUpdates', true),
             minimizeToTray: this.store.get('settings.minimizeToTray', true),
             theme: this.store.get('settings.theme', 'dark'),
           });

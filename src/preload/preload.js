@@ -42,6 +42,14 @@ contextBridge.exposeInMainWorld('bluetalk', {
     testPorts: () => ipcRenderer.invoke('network:testPorts'),
   },
 
+  // Auto updater
+  updater: {
+    getState: () => ipcRenderer.invoke('updater:getState'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    install: () => ipcRenderer.invoke('updater:install'),
+  },
+
   // Events from main process
   on: (channel, callback) => {
     const validChannels = [
@@ -51,6 +59,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
       'peer:file-offered',
       'peer:file-received',
       'peer:discovered',
+      'updater:state',
     ];
     if (validChannels.includes(channel)) {
       const listener = (_, ...args) => callback(...args);

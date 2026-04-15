@@ -8,18 +8,18 @@
     "dev:renderer": "vite",
     "dev:electron": "node scripts/wait-vite.js && electron .",
     "build:renderer": "vite build",
-    "build": "bun run build:renderer && electron-builder",
+    "build": "npm run build:renderer && electron-builder",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
     "concurrently": "^8.2.2",
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1",
-    "vite": "^5.0.10",
-    "@vitejs/plugin-react": "^4.2.1"
+    "vite": "^5.0.10"
   },
   "dependencies": {
-    "@rollup/rollup-linux-x64-gnu": "^4.60.1",
+    "electron-updater": "^6.8.3",
     "lucide-react": "^0.303.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -30,6 +30,7 @@
   "build": {
     "appId": "com.bluetalk.app",
     "productName": "BlueTalk",
+    "icon": "assets/icon.png",
     "files": [
       "src/**/*",
       "dist/**/*",
@@ -39,7 +40,15 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Henny263462",
+        "repo": "bluetalk"
+      }
+    ],
     "win": {
+      "icon": "assets/icon.ico",
       "target": [
         "nsis",
         "portable"
