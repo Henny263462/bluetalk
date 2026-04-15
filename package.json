@@ -2,6 +2,10 @@
   "name": "bluetalk",
   "version": "1.0.2",
   "description": "Peer-to-peer chat app designed for stealth, performance, and restricted networks",
+  "author": {
+    "name": "Henny263462",
+    "url": "https://github.com/Henny263462"
+  },
   "main": "src/main/main.js",
   "scripts": {
     "dev": "node scripts/dev.js",
