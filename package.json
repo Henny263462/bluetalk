@@ -1,6 +1,6 @@
 {
   "name": "bluetalk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Peer-to-peer chat app designed for stealth, performance, and restricted networks",
   "main": "src/main/main.js",
   "scripts": {

@@ -376,7 +376,7 @@ export default function SettingsPage() {
             <div className="updater-panel">
               <div className="card-row" style={{ alignItems: 'flex-start' }}>
                 <div style={{ minWidth: 0 }}>
-                  <div className="font-medium" style={{ fontSize: 13.5 }}>BlueTalk {updaterState?.currentVersion || settings.version || '1.0.0'}</div>
+                  <div className="font-medium" style={{ fontSize: 13.5 }}>BlueTalk {updaterState?.currentVersion || settings.version || '1.0.1'}</div>
                   <p className="text-sm text-muted" style={{ marginTop: 4 }}>
                     {updaterState?.message || 'Check for updates manually or let BlueTalk check in the background.'}
                   </p>
@@ -389,7 +389,7 @@ export default function SettingsPage() {
               <div className="updater-grid">
                 <div className="input-group">
                   <label>Current Version</label>
-                  <input className="input font-mono" value={updaterState?.currentVersion || '1.0.0'} readOnly />
+                  <input className="input font-mono" value={updaterState?.currentVersion || '1.0.1'} readOnly />
                 </div>
                 <div className="input-group">
                   <label>Latest Release</label>
