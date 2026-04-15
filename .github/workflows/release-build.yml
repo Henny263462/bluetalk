@@ -21,14 +21,18 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      ELECTRON_CACHE: ${{ runner.temp }}\electron-cache
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set Electron cache paths
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_ENV -Value "ELECTRON_CACHE=$env:RUNNER_TEMP\electron-cache"
+          Add-Content -Path $env:GITHUB_ENV -Value "ELECTRON_BUILDER_CACHE=$env:RUNNER_TEMP\electron-builder-cache"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
