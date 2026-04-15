@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Archive,
+  Copy,
   File,
   FileCode,
   FileImage,
@@ -9,8 +12,10 @@ import {
   FileText,
   FileType,
   Film,
+  MessageSquare,
   Music,
   Paperclip,
+  Pencil,
   Pin,
   PinOff,
   FileBarChart,
@@ -25,9 +30,25 @@ import { useToast } from '../components/ToastProvider';
 
 const CHAT_ICON_STROKE = 1.75;
 
+function formatMessageTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const main = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const ms = String(Math.floor(ts % 1000)).padStart(3, '0');
+  return `${main}.${ms}`;
+}
+
 function formatTime(ts) {
   if (!ts) return '';
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function selfDeliveryLabel(m) {
+  if (m.from !== 'self' || !m.messageId) return '';
+  if (m.deliveryStatus === 'scheduled') return 'Scheduled';
+  if (m.deliveryStatus === 'delivered') return 'Delivered';
+  if (m.deliveryStatus === 'pending') return 'Sending…';
+  return '';
 }
 
 function formatSize(bytes) {
@@ -83,17 +104,46 @@ function getLastPreview(message) {
   return (message.from === 'self' ? 'You: ' : '') + (message.content || 'Message');
 }
 
-function readFileAsData(file) {
+/**
+ * Reads file as base64 with progress (0–1). Uses ArrayBuffer so onprogress works for larger files.
+ */
+function readFileAsBase64WithProgress(file, onProgress) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '');
-      const parts = dataUrl.split(',');
-      const base64 = parts[1] || '';
-      resolve({ dataUrl, base64 });
+    reader.onprogress = (e) => {
+      if (e.lengthComputable && typeof onProgress === 'function' && e.total > 0) {
+        onProgress(Math.min(0.72, (e.loaded / e.total) * 0.72));
+      }
     };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+    reader.onload = () => {
+      try {
+        const buf = reader.result;
+        if (!(buf instanceof ArrayBuffer)) {
+          reject(new Error('Invalid read result'));
+          return;
+        }
+        const bytes = new Uint8Array(buf);
+        const chunkSize = 32768;
+        let binary = '';
+        const len = bytes.length;
+        for (let offset = 0; offset < len; offset += chunkSize) {
+          const slice = bytes.subarray(offset, Math.min(offset + chunkSize, len));
+          binary += String.fromCharCode.apply(null, slice);
+          if (typeof onProgress === 'function' && len > chunkSize && offset > 0 && offset % (chunkSize * 12) < chunkSize) {
+            onProgress(0.72 + (offset / len) * 0.26);
+          }
+        }
+        const base64 = btoa(binary);
+        const mime = file.type || 'application/octet-stream';
+        const dataUrl = `data:${mime};base64,${base64}`;
+        onProgress?.(1);
+        resolve({ dataUrl, base64 });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+    reader.readAsArrayBuffer(file);
   });
 }
 
@@ -334,25 +384,56 @@ function FileMessage({ message, bareLayout = false, onExpandImage, onSaveToDisk 
   );
 }
 
+function MarkdownBody({ text }) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return null;
+  return (
+    <div className="msg-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer">
+              {children}
+            </a>
+          ),
+          img: ({ src, alt }) =>
+            src?.startsWith('data:') || src?.startsWith('blob:') ? (
+              <img src={src} alt={alt || ''} className="msg-md-inline-img" loading="lazy" />
+            ) : (
+              <a href={src} target="_blank" rel="noopener noreferrer" className="msg-md-external-img-link">
+                {alt || src || 'Image'}
+              </a>
+            ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
 function ChatMessage({ message, onExpandImage }) {
   const imageUrl = getImageUrl(message);
-  if (!imageUrl) return <div>{message.content}</div>;
+  if (imageUrl) {
+    const open = () => {
+      const base64 = imageUrl.startsWith('data:') ? imageUrl.split(',')[1] || '' : '';
+      onExpandImage?.({
+        src: imageUrl,
+        alt: 'Geteiltes Bild',
+        defaultFilename: 'Bild',
+        base64,
+      });
+    };
 
-  const open = () => {
-    const base64 = imageUrl.startsWith('data:') ? imageUrl.split(',')[1] || '' : '';
-    onExpandImage?.({
-      src: imageUrl,
-      alt: 'Geteiltes Bild',
-      defaultFilename: 'Bild',
-      base64,
-    });
-  };
+    return (
+      <button type="button" className="msg-inline-image-link" onClick={open}>
+        <img src={imageUrl} alt="Geteiltes Bild" className="msg-inline-image" />
+      </button>
+    );
+  }
 
-  return (
-    <button type="button" className="msg-inline-image-link" onClick={open}>
-      <img src={imageUrl} alt="Geteiltes Bild" className="msg-inline-image" />
-    </button>
-  );
+  return <MarkdownBody text={message.content} />;
 }
 
 function MediaLightbox({ open, src, alt, canSave, onClose, onSave }) {
@@ -413,7 +494,9 @@ export default function ChatsPage() {
     loadedChats,
     messages,
     settings,
+    peerReadReceipts,
     sendMessage,
+    sendReadReceipt,
     loadChatMessages,
     connectToAddress,
     setContactNickname,
@@ -438,14 +521,23 @@ export default function ChatsPage() {
   const [showNickname, setShowNickname] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteTargetPeerId, setDeleteTargetPeerId] = useState(null);
   const [deletingChat, setDeletingChat] = useState(false);
+  const [listContextMenu, setListContextMenu] = useState(null);
 
   const [pendingFile, setPendingFile] = useState(null);
-  const [readingFile, setReadingFile] = useState(false);
+  /** null | { stage: 'reading' | 'sending', percent: number, detail: string } */
+  const [fileTransfer, setFileTransfer] = useState(null);
   const [mediaLightbox, setMediaLightbox] = useState(null);
 
   const endRef = useRef(null);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
+  const lastReadSentRef = useRef({});
+  const listContextMenuRef = useRef(null);
+
+  const readingFile = fileTransfer?.stage === 'reading';
+  const sendingFile = fileTransfer?.stage === 'sending';
 
   const chatList = useMemo(() => {
     const ids = new Set([
@@ -509,6 +601,13 @@ export default function ChatsPage() {
     [chatList, selectedPeerId]
   );
 
+  const peerPendingDelete = useMemo(
+    () => (deleteTargetPeerId ? chatList.find((c) => c.id === deleteTargetPeerId) || null : null),
+    [chatList, deleteTargetPeerId]
+  );
+
+  const closeListContextMenu = useCallback(() => setListContextMenu(null), []);
+
   const openPeerFromNav = location.state?.openPeerId;
   useEffect(() => {
     if (!openPeerFromNav) return;
@@ -524,6 +623,7 @@ export default function ChatsPage() {
   }, [openPeerFromNav, selectedPeerId, mainChatList]);
 
   const msgs = selectedPeer ? messages[selectedPeer.id] || [] : [];
+  const readUpToId = selectedPeer ? peerReadReceipts[selectedPeer.id] : null;
   const hasMoreMessages = selectedPeer ? selectedPeer.messageCount > msgs.length : false;
   const newestTimestamp = msgs[msgs.length - 1]?.timestamp || 0;
 
@@ -568,6 +668,28 @@ export default function ChatsPage() {
   }, [newestTimestamp, selectedPeerId]);
 
   useEffect(() => {
+    if (!selectedPeerId || !settings.sendReadReceipts) return;
+    const peerMsgs = msgs.filter((m) => m.from !== 'self');
+    const last = peerMsgs[peerMsgs.length - 1];
+    if (!last?.messageId) return;
+    if (lastReadSentRef.current[selectedPeerId] === last.messageId) return;
+    lastReadSentRef.current[selectedPeerId] = last.messageId;
+    void sendReadReceipt(selectedPeerId, last.messageId);
+  }, [selectedPeerId, msgs, settings.sendReadReceipts, sendReadReceipt]);
+
+  const adjustTextareaHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = 220;
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+  }, []);
+
+  useLayoutEffect(() => {
+    adjustTextareaHeight();
+  }, [input, adjustTextareaHeight]);
+
+  useEffect(() => {
     if (!mediaLightbox) return;
     const onKey = (e) => {
       if (e.key === 'Escape') setMediaLightbox(null);
@@ -575,6 +697,32 @@ export default function ChatsPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mediaLightbox]);
+
+  useEffect(() => {
+    if (!listContextMenu) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeListContextMenu();
+    };
+    const onPointerDown = (e) => {
+      if (listContextMenuRef.current?.contains(e.target)) return;
+      closeListContextMenu();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onPointerDown, true);
+    window.addEventListener('blur', closeListContextMenu);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onPointerDown, true);
+      window.removeEventListener('blur', closeListContextMenu);
+    };
+  }, [listContextMenu, closeListContextMenu]);
+
+  useEffect(() => {
+    if (showDeleteConfirm && deleteTargetPeerId && !peerPendingDelete) {
+      setShowDeleteConfirm(false);
+      setDeleteTargetPeerId(null);
+    }
+  }, [showDeleteConfirm, deleteTargetPeerId, peerPendingDelete]);
 
   const saveAttachmentToDisk = async (fileName, base64) => {
     if (!base64) return;
@@ -631,6 +779,7 @@ export default function ChatsPage() {
   const send = async () => {
     if (!selectedPeer) return;
     if (!input.trim() && !pendingFile) return;
+    if (sendingFile) return;
 
     setWarning('');
 
@@ -646,21 +795,36 @@ export default function ChatsPage() {
     }
 
     if (pendingFile) {
-      const ok = await sendMessage(selectedPeer.id, {
-        kind: 'file',
-        content: pendingFile.name,
-        fileName: pendingFile.name,
-        fileSize: pendingFile.size,
-        fileType: pendingFile.type,
-        fileData: pendingFile.base64,
-      });
-      if (!ok) {
-        const msg = 'File could not be delivered. Peer is probably offline.';
-        setWarning(msg);
-        toast({ variant: 'error', title: 'File not sent', message: msg });
-        return;
+      let progressTimer = null;
+      setFileTransfer({ stage: 'sending', percent: 48, detail: 'Sending attachment…' });
+      progressTimer = setInterval(() => {
+        setFileTransfer((prev) => {
+          if (!prev || prev.stage !== 'sending') return prev;
+          return { ...prev, percent: Math.min(96, prev.percent + 1.1) };
+        });
+      }, 120);
+      try {
+        const ok = await sendMessage(selectedPeer.id, {
+          kind: 'file',
+          content: pendingFile.name,
+          fileName: pendingFile.name,
+          fileSize: pendingFile.size,
+          fileType: pendingFile.type,
+          fileData: pendingFile.base64,
+        });
+        if (!ok) {
+          const msg = 'File could not be delivered. Peer is probably offline.';
+          setWarning(msg);
+          toast({ variant: 'error', title: 'File not sent', message: msg });
+          setFileTransfer(null);
+          return;
+        }
+        setFileTransfer({ stage: 'sending', percent: 100, detail: 'Sent' });
+        setPendingFile(null);
+        setTimeout(() => setFileTransfer(null), 400);
+      } finally {
+        if (progressTimer) clearInterval(progressTimer);
       }
-      setPendingFile(null);
     }
   };
 
@@ -692,10 +856,16 @@ export default function ChatsPage() {
       return;
     }
 
-    setReadingFile(true);
+    setFileTransfer({ stage: 'reading', percent: 0, detail: 'Reading file…' });
     setWarning('');
     try {
-      const data = await readFileAsData(file);
+      const data = await readFileAsBase64WithProgress(file, (p) => {
+        setFileTransfer({
+          stage: 'reading',
+          percent: Math.min(100, Math.round(p * 100)),
+          detail: 'Reading file…',
+        });
+      });
       setPendingFile({
         name: file.name,
         size: file.size,
@@ -708,7 +878,7 @@ export default function ChatsPage() {
       setWarning(msg);
       toast({ variant: 'error', title: 'File error', message: msg });
     } finally {
-      setReadingFile(false);
+      setFileTransfer(null);
     }
   };
 
@@ -748,17 +918,59 @@ export default function ChatsPage() {
   };
 
   const confirmDeleteChat = async () => {
-    if (!selectedPeer) return;
+    if (!deleteTargetPeerId) return;
     setDeletingChat(true);
     try {
-      await deleteChat(selectedPeer.id);
-      setSelectedPeerId(null);
+      await deleteChat(deleteTargetPeerId);
+      if (selectedPeerId === deleteTargetPeerId) {
+        setSelectedPeerId(null);
+      }
       setWarning('');
       setPendingFile(null);
       setShowDeleteConfirm(false);
+      setDeleteTargetPeerId(null);
     } finally {
       setDeletingChat(false);
     }
+  };
+
+  const openChatListContextMenu = (e, chat) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedPeerId(chat.id);
+    const pad = 8;
+    const mw = 232;
+    const mh = 220;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + mw > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - mw - pad);
+    if (y + mh > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - mh - pad);
+    if (x < pad) x = pad;
+    if (y < pad) y = pad;
+    setListContextMenu({ chat, x, y });
+  };
+
+  const openDeleteForPeer = (peerId) => {
+    setDeleteTargetPeerId(peerId);
+    setShowDeleteConfirm(true);
+    closeListContextMenu();
+  };
+
+  const openNicknameForChat = (chat) => {
+    setSelectedPeerId(chat.id);
+    setNicknameInput(chat.contact?.nickname || '');
+    setShowNickname(true);
+    closeListContextMenu();
+  };
+
+  const copyPeerIdFromMenu = async (peerId) => {
+    try {
+      await navigator.clipboard.writeText(peerId);
+      toast({ variant: 'success', title: 'Peer-ID kopiert' });
+    } catch {
+      toast({ variant: 'error', title: 'Kopieren fehlgeschlagen' });
+    }
+    closeListContextMenu();
   };
 
   return (
@@ -801,6 +1013,7 @@ export default function ChatsPage() {
                 key={chat.id}
                 className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}`}
                 onClick={() => setSelectedPeerId(chat.id)}
+                onContextMenu={(e) => openChatListContextMenu(e, chat)}
               >
                 <PeerAvatar pictureUrl={chat.profilePicture} name={chat.displayName} size={36} />
                 <div className="list-item-info">
@@ -872,7 +1085,7 @@ export default function ChatsPage() {
                   </button>
                   <button
                     className="btn btn-danger btn-icon"
-                    onClick={() => setShowDeleteConfirm(true)}
+                    onClick={() => openDeleteForPeer(selectedPeer.id)}
                     title="Chat löschen"
                   >
                     <Trash2 size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
@@ -906,9 +1119,12 @@ export default function ChatsPage() {
                   const bubbleName = isSelf ? (settings.displayName || 'You') : (m.sender || selectedPeer.displayName);
                   const bubblePic = isSelf ? settings.profilePicture : selectedPeer.profilePicture;
                   const bareMedia = isBareMediaMessage(m);
+                  const delivery = selfDeliveryLabel(m);
+                  const seen = isSelf && readUpToId && m.messageId && readUpToId === m.messageId ? 'Seen' : '';
+                  const statusLine = [delivery, seen].filter(Boolean).join(' · ');
                   return (
                     <div
-                      key={`${m.timestamp || i}-${m.from || 'msg'}-${i}`}
+                      key={m.messageId || `${m.timestamp || i}-${m.from || 'msg'}-${i}`}
                       className={['msg-row', isSelf ? 'msg-row-self' : 'msg-row-other', bareMedia && 'msg-row--bare']
                         .filter(Boolean)
                         .join(' ')}
@@ -930,7 +1146,10 @@ export default function ChatsPage() {
                         ) : (
                           <ChatMessage message={m} onExpandImage={setMediaLightbox} />
                         )}
-                        <div className="msg-time">{formatTime(m.timestamp)}</div>
+                        <div className={`msg-meta${isSelf ? ' msg-meta--self' : ''}`}>
+                          <span className="msg-time">{formatMessageTime(m.timestamp)}</span>
+                          {statusLine ? <span className="msg-delivery">{statusLine}</span> : null}
+                        </div>
                       </div>
                     </div>
                   );
@@ -949,12 +1168,34 @@ export default function ChatsPage() {
                   </div>
                   <button
                     className="btn btn-ghost btn-icon"
-                    onClick={() => setPendingFile(null)}
+                    onClick={() => !sendingFile && setPendingFile(null)}
+                    disabled={sendingFile}
                     title="Anhang entfernen"
                     type="button"
                   >
                     <X size={16} strokeWidth={CHAT_ICON_STROKE} />
                   </button>
+                </div>
+              )}
+
+              {fileTransfer && (
+                <div
+                  className="chat-file-progress"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(fileTransfer.percent)}
+                  aria-label={fileTransfer.detail}
+                >
+                  <div className="chat-file-progress-track">
+                    <div
+                      className="chat-file-progress-fill"
+                      style={{ width: `${Math.min(100, fileTransfer.percent)}%` }}
+                    />
+                  </div>
+                  <div className="chat-file-progress-label">
+                    {fileTransfer.detail} <span className="text-muted">{Math.round(fileTransfer.percent)}%</span>
+                  </div>
                 </div>
               )}
 
@@ -966,18 +1207,19 @@ export default function ChatsPage() {
                   hidden
                   ref={fileInputRef}
                   onChange={handleFilePicked}
-                  disabled={readingFile || !selectedPeer}
+                  disabled={readingFile || sendingFile || !selectedPeer}
                 />
                 <button
                   className="btn btn-secondary btn-icon"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={readingFile || !selectedPeer}
+                  disabled={readingFile || sendingFile || !selectedPeer}
                   title="Datei anhängen"
                   style={{ height: 40, width: 40 }}
                 >
                   <Paperclip size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                 </button>
                 <textarea
+                  ref={textareaRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => {
@@ -986,13 +1228,13 @@ export default function ChatsPage() {
                       send();
                     }
                   }}
-                  placeholder={readingFile ? 'Reading file...' : 'Type a message...'}
+                  placeholder={readingFile ? 'Reading file…' : 'Type a message… (Markdown supported)'}
                   rows={1}
                 />
                 <button
                   className="btn btn-primary btn-icon"
                   onClick={send}
-                  disabled={!input.trim() && !pendingFile}
+                  disabled={sendingFile || readingFile || (!input.trim() && !pendingFile)}
                   style={{ height: 40, width: 40 }}
                   title="Nachricht senden"
                 >
@@ -1063,17 +1305,25 @@ export default function ChatsPage() {
         </div>
       )}
 
-      {showDeleteConfirm && selectedPeer && (
+      {showDeleteConfirm && peerPendingDelete && (
         <div
           className="modal-overlay"
-          onClick={() => !deletingChat && setShowDeleteConfirm(false)}
+          onClick={() => {
+            if (deletingChat) return;
+            setShowDeleteConfirm(false);
+            setDeleteTargetPeerId(null);
+          }}
         >
           <div className="modal modal-danger animate-scale" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-2">
               <h3 style={{ margin: 0 }}>Delete chat?</h3>
               <button
                 className="btn btn-ghost btn-icon"
-                onClick={() => !deletingChat && setShowDeleteConfirm(false)}
+                onClick={() => {
+                  if (deletingChat) return;
+                  setShowDeleteConfirm(false);
+                  setDeleteTargetPeerId(null);
+                }}
                 disabled={deletingChat}
                 aria-label="Schließen"
               >
@@ -1081,12 +1331,15 @@ export default function ChatsPage() {
               </button>
             </div>
             <p className="text-muted" style={{ margin: '0 0 16px', lineHeight: 1.5 }}>
-              This removes the conversation with <strong>{selectedPeer.displayName}</strong> and all messages stored on this device. This cannot be undone.
+              This removes the conversation with <strong>{peerPendingDelete.displayName}</strong> and all messages stored on this device. This cannot be undone.
             </p>
             <div className="modal-actions">
               <button
                 className="btn btn-secondary"
-                onClick={() => setShowDeleteConfirm(false)}
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setDeleteTargetPeerId(null);
+                }}
                 disabled={deletingChat}
               >
                 Cancel
@@ -1100,6 +1353,73 @@ export default function ChatsPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {listContextMenu && (
+        <div
+          ref={listContextMenuRef}
+          className="chat-list-context-menu"
+          role="menu"
+          style={{ left: listContextMenu.x, top: listContextMenu.y }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setSelectedPeerId(listContextMenu.chat.id);
+              closeListContextMenu();
+            }}
+          >
+            <MessageSquare size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            Chat öffnen
+          </button>
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              setChatPinned(listContextMenu.chat.id, !listContextMenu.chat.pinned);
+              closeListContextMenu();
+            }}
+          >
+            {listContextMenu.chat.pinned ? (
+              <PinOff size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            ) : (
+              <Pin size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            )}
+            {listContextMenu.chat.pinned ? 'Chat lösen' : 'Chat anheften'}
+          </button>
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => openNicknameForChat(listContextMenu.chat)}
+          >
+            <Pencil size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            Spitzname…
+          </button>
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => copyPeerIdFromMenu(listContextMenu.chat.id)}
+          >
+            <Copy size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            Peer-ID kopieren
+          </button>
+          <div className="chat-list-context-menu-sep" role="separator" />
+          <button
+            type="button"
+            className="chat-list-context-menu-item chat-list-context-menu-item--danger"
+            role="menuitem"
+            onClick={() => openDeleteForPeer(listContextMenu.chat.id)}
+          >
+            <Trash2 size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            Chat löschen…
+          </button>
         </div>
       )}
     </div>

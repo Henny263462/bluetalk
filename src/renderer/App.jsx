@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, startTransition, createContext, useContext } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, startTransition, createContext, useContext } from 'react';
 import { HashRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { MessageCircle, Settings as SettingsIcon, UserPlus, Minus, Maximize2, SquareStack, X } from 'lucide-react';
 
@@ -16,6 +16,17 @@ import ErrorBoundary from './components/ErrorBoundary';
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 const CHAT_MESSAGE_BATCH_SIZE = 24;
+
+function newChatMessageId() {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {
+    /* ignore */
+  }
+  return `bt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
 
 function TitleBar() {
   const { peerCount } = useApp();
@@ -123,9 +134,25 @@ export default function App() {
     launchAtLogin: false,
     theme: 'dark',
     debugMode: false,
+    windowsNotifications: true,
+    sendReadReceipts: true,
   });
   const messageCacheRef = useRef({});
+  const deliveryTimersRef = useRef(new Map());
+  const settingsRef = useRef(settings);
+  const [peerReadReceipts, setPeerReadReceipts] = useState({});
   const [loadError, setLoadError] = useState('');
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  useEffect(() => () => {
+    for (const t of deliveryTimersRef.current.values()) {
+      clearTimeout(t);
+    }
+    deliveryTimersRef.current.clear();
+  }, []);
 
   const upsertContact = useCallback((patch) => {
     if (!patch?.id) return;
@@ -152,50 +179,6 @@ export default function App() {
     messageCacheRef.current = messages;
   }, [messages]);
 
-  useEffect(() => {
-    const load = async () => {
-      if (!window.bluetalk) return;
-
-      try {
-        const [storedContacts, storedChatMeta, storedSettings, currentPeers] = await Promise.all([
-          window.bluetalk.store.get('contacts', []),
-          window.bluetalk.messages.getMeta(),
-          window.bluetalk.store.get('settings', {}),
-          window.bluetalk.peer.getPeers(),
-        ]);
-
-        const meta = storedChatMeta || {};
-        let migrated = false;
-        const normalized = (storedContacts || []).map((c) => {
-          if (!c?.id) return c;
-          const count = meta[c.id]?.count || 0;
-          if (count > 0 && c.hasOutgoing !== true && c.pendingMessageRequest !== true) {
-            migrated = true;
-            return { ...c, hasOutgoing: true };
-          }
-          return c;
-        });
-        if (migrated) {
-          window.bluetalk.store.set('contacts', normalized);
-        }
-
-        setContacts(normalized);
-        setChatMeta(meta);
-
-        if (storedSettings) {
-          setSettings((s) => ({ ...s, ...storedSettings }));
-          if (storedSettings.theme) setTheme(storedSettings.theme);
-        }
-        setPeers(currentPeers || []);
-        setLoadError('');
-      } catch (e) {
-        setLoadError(e?.message || 'Could not load your local data.');
-      }
-    };
-
-    load();
-  }, []);
-
   const loadChatMessages = useCallback(async (peerId, options = {}) => {
     if (!window.bluetalk || !peerId) {
       return { messages: [], total: 0, hasMore: false };
@@ -217,8 +200,21 @@ export default function App() {
     return batch;
   }, []);
 
-  useEffect(() => {
-    if (!window.bluetalk) return;
+  const applyMessagePatch = useCallback(async (peerId, messageId, patch) => {
+    if (!window.bluetalk || !peerId || !messageId || !patch) return;
+    await window.bluetalk.messages.patch(peerId, messageId, patch);
+    setMessages((prev) => {
+      const list = prev[peerId] || [];
+      const idx = list.findIndex((m) => m.messageId === messageId);
+      if (idx < 0) return prev;
+      const next = [...list];
+      next[idx] = { ...next[idx], ...patch };
+      return { ...prev, [peerId]: next };
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!window.bluetalk) return undefined;
     const unsubs = [];
 
     unsubs.push(
@@ -248,6 +244,12 @@ export default function App() {
     );
 
     unsubs.push(
+      window.bluetalk.on('peers:list-sync', (list) => {
+        setPeers(Array.isArray(list) ? list : []);
+      })
+    );
+
+    unsubs.push(
       window.bluetalk.on('peer:message', async (msg) => {
         if (msg.kind === 'profile' && msg.from) {
           upsertContact({
@@ -259,20 +261,55 @@ export default function App() {
           return;
         }
 
-        const meta = await window.bluetalk.messages.append(msg.from, msg);
+        if (msg.kind === 'delivery-receipt' && msg.refMessageId && msg.from) {
+          const tid = deliveryTimersRef.current.get(msg.refMessageId);
+          if (tid) clearTimeout(tid);
+          deliveryTimersRef.current.delete(msg.refMessageId);
+          await applyMessagePatch(msg.from, msg.refMessageId, {
+            deliveryStatus: 'delivered',
+            deliveredAt: typeof msg.receivedAt === 'number' ? msg.receivedAt : Date.now(),
+          });
+          return;
+        }
+
+        if (msg.kind === 'read-receipt' && msg.lastReadMessageId && msg.from) {
+          setPeerReadReceipts((prev) => {
+            const next = { ...prev, [msg.from]: msg.lastReadMessageId };
+            if (window.bluetalk) window.bluetalk.store.set('chatReadReceipts', next);
+            return next;
+          });
+          return;
+        }
+
+        const normalized = {
+          ...msg,
+          messageId: msg.messageId || newChatMessageId(),
+          timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : Date.now(),
+        };
+
+        if ((normalized.kind === 'chat' || normalized.kind === 'file') && msg.messageId && msg.from) {
+          void window.bluetalk.peer.send(msg.from, {
+            kind: 'delivery-receipt',
+            refMessageId: msg.messageId,
+            receivedAt: Date.now(),
+            sender: settingsRef.current.displayName,
+          });
+        }
+
+        const meta = await window.bluetalk.messages.append(msg.from, normalized);
 
         setChatMeta((prev) => ({
           ...prev,
           [msg.from]: meta?.count ? meta : {
             count: (prev[msg.from]?.count || 0) + 1,
-            lastMessage: msg,
+            lastMessage: normalized,
           },
         }));
 
         startTransition(() => {
           setMessages((prev) => ({
             ...prev,
-            [msg.from]: [...(prev[msg.from] || []), msg],
+            [msg.from]: [...(prev[msg.from] || []), normalized],
           }));
         });
 
@@ -284,7 +321,7 @@ export default function App() {
             const requestCleared = existing?.pendingMessageRequest === false;
             const merged = {
               ...(existing || { id: msg.from, addedAt: Date.now() }),
-              name: msg.sender || existing?.name || msg.from,
+              name: normalized.sender || existing?.name || msg.from,
               pendingMessageRequest: hasOutgoing || requestCleared ? false : true,
             };
             const updated = idx >= 0
@@ -297,8 +334,56 @@ export default function App() {
       })
     );
 
-    return () => unsubs.forEach((unsub) => unsub?.());
-  }, [upsertContact]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [storedContacts, storedChatMeta, storedSettings, storedReadReceipts, currentPeers] = await Promise.all([
+          window.bluetalk.store.get('contacts', []),
+          window.bluetalk.messages.getMeta(),
+          window.bluetalk.store.get('settings', {}),
+          window.bluetalk.store.get('chatReadReceipts', {}),
+          window.bluetalk.peer.getPeers(),
+        ]);
+
+        if (cancelled) return;
+
+        const meta = storedChatMeta || {};
+        let migrated = false;
+        const normalized = (storedContacts || []).map((c) => {
+          if (!c?.id) return c;
+          const count = meta[c.id]?.count || 0;
+          if (count > 0 && c.hasOutgoing !== true && c.pendingMessageRequest !== true) {
+            migrated = true;
+            return { ...c, hasOutgoing: true };
+          }
+          return c;
+        });
+        if (migrated) {
+          window.bluetalk.store.set('contacts', normalized);
+        }
+
+        setContacts(normalized);
+        setChatMeta(meta);
+        setPeerReadReceipts(storedReadReceipts && typeof storedReadReceipts === 'object' ? storedReadReceipts : {});
+
+        if (storedSettings) {
+          setSettings((s) => ({ ...s, ...storedSettings }));
+          if (storedSettings.theme) setTheme(storedSettings.theme);
+        }
+        setPeers(currentPeers || []);
+        setLoadError('');
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(e?.message || 'Could not load your local data.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubs.forEach((unsub) => unsub?.());
+    };
+  }, [upsertContact, applyMessagePatch]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -315,15 +400,20 @@ export default function App() {
       ? { kind: 'chat', content: payload }
       : { kind: 'chat', ...payload };
 
+    const messageId = newChatMessageId();
+    const createdAt = Date.now();
+
     const msg = {
       ...outgoing,
       sender: settings.displayName,
+      messageId,
+      timestamp: createdAt,
     };
 
     const selfMessage = {
       ...msg,
       from: 'self',
-      timestamp: Date.now(),
+      deliveryStatus: 'pending',
     };
 
     try {
@@ -347,11 +437,31 @@ export default function App() {
 
       upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
 
+      const t = setTimeout(() => {
+        deliveryTimersRef.current.delete(messageId);
+        void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
+      }, 8000);
+      deliveryTimersRef.current.set(messageId, t);
+
       return true;
     } catch {
       return false;
     }
-  }, [settings.displayName, upsertContact]);
+  }, [settings.displayName, upsertContact, applyMessagePatch]);
+
+  const sendReadReceipt = useCallback(async (peerId, lastReadMessageId) => {
+    if (!window.bluetalk || !peerId || !lastReadMessageId) return;
+    if (!settings.sendReadReceipts) return;
+    try {
+      await window.bluetalk.peer.send(peerId, {
+        kind: 'read-receipt',
+        lastReadMessageId,
+        sender: settings.displayName,
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [settings.displayName, settings.sendReadReceipts]);
 
   const connectToAddress = useCallback(async (address) => {
     if (!window.bluetalk || !address?.trim()) {
@@ -405,6 +515,12 @@ export default function App() {
     if (!window.bluetalk || !peerId) return false;
 
     await window.bluetalk.messages.deleteChat(peerId);
+    setPeerReadReceipts((prev) => {
+      const next = { ...prev };
+      delete next[peerId];
+      if (window.bluetalk) window.bluetalk.store.set('chatReadReceipts', next);
+      return next;
+    });
     setMessages((prev) => {
       const updated = { ...prev };
       delete updated[peerId];
@@ -453,7 +569,9 @@ export default function App() {
     settings,
     theme,
     peerCount: peers.length,
+    peerReadReceipts,
     sendMessage,
+    sendReadReceipt,
     loadChatMessages,
     connectToAddress,
     refreshDiscovery,

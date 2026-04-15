@@ -526,9 +526,39 @@ export default function SettingsPage() {
               <div className="toggle-row-info">
                 <span className="toggle-row-label-with-icon">
                   <Bell size={15} strokeWidth={ICON_STROKE} aria-hidden />
-                  Windows Notifications
+                  Windows-Benachrichtigungen
                 </span>
-                <span>Show system notifications for diagnostics and incoming events</span>
+                <span>System-Mitteilungen für eingehende Nachrichten. Mehrere in kurzer Zeit werden zu einer Zusammenfassung gruppiert.</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={local.windowsNotifications ?? true}
+                  onChange={(e) => change('windowsNotifications', e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Lesebestätigungen senden</span>
+                <span>Wenn aus, sehen andere nicht, dass du ihre Nachrichten gelesen hast („Seen“).</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={local.sendReadReceipts ?? true}
+                  onChange={(e) => change('sendReadReceipts', e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Testbenachrichtigung</span>
+                <span>Prüft, ob Windows eine Mitteilung anzeigen darf (nur wenn Benachrichtigungen oben aktiv sind).</span>
               </div>
               <button
                 className="btn btn-secondary btn-sm"

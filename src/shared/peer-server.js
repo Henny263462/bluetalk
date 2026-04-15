@@ -349,6 +349,7 @@ class PeerServer extends EventEmitter {
         } catch {}
         this._broadcastPresence();
         this._discoveryTimer = setInterval(() => this._broadcastPresence(), DISCOVERY_INTERVAL);
+        setTimeout(() => this._broadcastPresence(), 1500);
       });
     } catch (err) {
       console.warn('[Discovery] Could not start:', err.message);
@@ -358,6 +359,12 @@ class PeerServer extends EventEmitter {
   /** Send an immediate discovery broadcast (same as the periodic LAN beacon). */
   refreshDiscovery() {
     this._broadcastPresence();
+    for (const id of this.discoveredPeers.keys()) {
+      if (!id || id === this.id || this.peers.has(id)) continue;
+      const snapshot = this.discoveredPeers.get(id);
+      if (!snapshot) continue;
+      void this.connectTo(snapshot).catch(() => {});
+    }
   }
 
   _broadcastPresence(targetAddresses = null, extraPayload = {}) {
@@ -832,19 +839,21 @@ class PeerServer extends EventEmitter {
   sendTo(peerId, data) {
     const peer = this.peers.get(peerId);
     if (!peer) return false;
+    const ts = typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp) ? data.timestamp : Date.now();
     this._wsSend(peer.socket, JSON.stringify({
       type: 'message',
       ...data,
-      timestamp: Date.now(),
+      timestamp: ts,
     }));
     return true;
   }
 
   broadcast(data) {
+    const ts = typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp) ? data.timestamp : Date.now();
     const payload = JSON.stringify({
       type: 'message',
       ...data,
-      timestamp: Date.now(),
+      timestamp: ts,
     });
     for (const [, peer] of this.peers) {
       this._wsSend(peer.socket, payload);
@@ -953,7 +962,10 @@ class PeerServer extends EventEmitter {
   }
 
   stop() {
-    if (this._discoveryTimer) clearInterval(this._discoveryTimer);
+    if (this._discoveryTimer) {
+      clearInterval(this._discoveryTimer);
+      this._discoveryTimer = null;
+    }
     if (this.discoverySocket) {
       try {
         this.discoverySocket.close();

@@ -74,6 +74,16 @@ function appendStoredChatMessage(peerId, message) {
   return updated;
 }
 
+function patchStoredChatMessage(peerId, messageId, patch) {
+  if (!peerId || !messageId || !patch || typeof patch !== 'object') return false;
+  const list = getStoredChatMessages(peerId);
+  const idx = list.findIndex((m) => m && m.messageId === messageId);
+  if (idx < 0) return false;
+  list[idx] = { ...list[idx], ...patch };
+  setStoredChatMessages(peerId, list);
+  return true;
+}
+
 function getChatMessageMeta() {
   const storedMessages = getStoredMessages();
   const meta = {};
@@ -474,6 +484,9 @@ async function runPortDiagnostics() {
 function showWindowsNotification(title, body = '') {
   if (process.platform !== 'win32') return false;
   if (!Notification.isSupported()) return false;
+  if (store && store.get('settings.windowsNotifications', true) === false) {
+    return false;
+  }
 
   const notification = new Notification({
     title: title || 'BlueTalk',
@@ -485,6 +498,58 @@ function showWindowsNotification(title, body = '') {
   notification.on('click', () => showMainWindow());
   notification.show();
   return true;
+}
+
+const INCOMING_NOTIF_GROUP_MS = 2200;
+let incomingNotifBatch = {
+  senderLabel: '',
+  previews: [],
+  timer: null,
+};
+
+function flushIncomingNotificationBatch() {
+  if (incomingNotifBatch.timer) {
+    clearTimeout(incomingNotifBatch.timer);
+    incomingNotifBatch.timer = null;
+  }
+  const { senderLabel, previews } = incomingNotifBatch;
+  incomingNotifBatch.previews = [];
+  incomingNotifBatch.senderLabel = '';
+  if (!previews.length) return;
+
+  if (previews.length === 1) {
+    showWindowsNotification(senderLabel || 'BlueTalk', previews[0]);
+    return;
+  }
+
+  showWindowsNotification(
+    'BlueTalk',
+    `You have ${previews.length} notifications from ${senderLabel || 'a contact'}`
+  );
+}
+
+function queueIncomingChatNotification(data) {
+  if (store && store.get('settings.windowsNotifications', true) === false) {
+    return;
+  }
+  const senderLabel = data.sender || data.from || 'BlueTalk';
+  const preview =
+    data.kind === 'file'
+      ? `File: ${data.fileName || data.content || 'Attachment'}`
+      : (data.content || 'New message');
+
+  if (incomingNotifBatch.senderLabel !== senderLabel) {
+    flushIncomingNotificationBatch();
+    incomingNotifBatch.senderLabel = senderLabel;
+  }
+
+  incomingNotifBatch.previews.push(preview);
+  if (incomingNotifBatch.timer) {
+    clearTimeout(incomingNotifBatch.timer);
+  }
+  incomingNotifBatch.timer = setTimeout(() => {
+    flushIncomingNotificationBatch();
+  }, INCOMING_NOTIF_GROUP_MS);
 }
 
 function showMainWindow() {
@@ -504,6 +569,16 @@ function broadcastWindowMaximized() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try {
     mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+  } catch {
+    /* webContents unavailable during teardown */
+  }
+}
+
+/** Peers can connect before the renderer registers IPC listeners; push authoritative state after each load. */
+function syncPeersToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed() || !peerServer) return;
+  try {
+    mainWindow.webContents.send('peers:list-sync', peerServer.getPeers());
   } catch {
     /* webContents unavailable during teardown */
   }
@@ -542,6 +617,7 @@ function createWindow() {
   mainWindow.webContents.on('did-finish-load', () => {
     broadcastUpdateState();
     broadcastWindowMaximized();
+    syncPeersToRenderer();
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -617,6 +693,9 @@ function setupIPC() {
     appendStoredChatMessage(peerId, message);
     return getChatMessageMeta()[peerId] || { count: 0, lastMessage: null };
   });
+  ipcMain.handle('messages:patch', (_, peerId, messageId, patch) =>
+    patchStoredChatMessage(peerId, messageId, patch)
+  );
   ipcMain.handle('messages:deleteChat', (_, peerId) => {
     store.delete(`messages.${peerId}`);
     return true;
@@ -660,6 +739,9 @@ function setupIPC() {
   });
 
   ipcMain.handle('notify:show', (_, payload = {}) => {
+    if (store && store.get('settings.windowsNotifications', true) === false) {
+      return false;
+    }
     return showWindowsNotification(payload.title || 'BlueTalk', payload.body || '');
   });
 
@@ -682,10 +764,9 @@ function setupIPC() {
   for (const event of forwardEvents) {
     peerServer.on(event, (data) => {
       if (event === 'peer:message' && data?.from !== 'self' && data?.kind !== 'profile') {
-        const preview = data.kind === 'file'
-          ? `File: ${data.fileName || data.content || 'Attachment'}`
-          : (data.content || 'New message');
-        showWindowsNotification(data.sender || data.from || 'BlueTalk', preview);
+        if (data.kind !== 'delivery-receipt' && data.kind !== 'read-receipt') {
+          queueIncomingChatNotification(data);
+        }
       }
       mainWindow?.webContents.send(event, data);
     });

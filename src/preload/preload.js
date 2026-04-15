@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
     getMeta: () => ipcRenderer.invoke('messages:getMeta'),
     getBatch: (peerId, options) => ipcRenderer.invoke('messages:getBatch', peerId, options),
     append: (peerId, message) => ipcRenderer.invoke('messages:append', peerId, message),
+    patch: (peerId, messageId, patch) => ipcRenderer.invoke('messages:patch', peerId, messageId, patch),
     deleteChat: (peerId) => ipcRenderer.invoke('messages:deleteChat', peerId),
   },
 
@@ -74,6 +75,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
       'peer:file-offered',
       'peer:file-received',
       'peer:discovered',
+      'peers:list-sync',
       'updater:state',
     ];
     if (validChannels.includes(channel)) {
