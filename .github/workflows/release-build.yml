@@ -21,6 +21,7 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      EP_GH_IGNORE_TIME: "true"
 
     steps:
       - name: Check out repository
@@ -56,6 +57,9 @@ jobs:
 
       - name: Build renderer
         run: npm run build:renderer
+
+      - name: Force GitHub publish to release (not draft)
+        run: node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));const pub=p.build&&p.build.publish;const set=x=>{if(x&&x.provider==='github')x.releaseType='release'};if(Array.isArray(pub))pub.forEach(set);else if(pub)set(pub);fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n');"
 
       - name: Build and publish release assets
         run: npx electron-builder --win nsis portable --publish always

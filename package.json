@@ -44,7 +44,8 @@
       {
         "provider": "github",
         "owner": "Henny263462",
-        "repo": "bluetalk"
+        "repo": "bluetalk",
+        "releaseType": "release"
       }
     ],
     "win": {
