@@ -4,19 +4,20 @@ import { MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 
 import ChatsPage from './pages/Chats';
 import SettingsPage from './pages/Settings';
+import appIconUrl from '../../assets/icon.svg';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 const CHAT_MESSAGE_BATCH_SIZE = 24;
 
 function TitleBar() {
-  const { peerCount, theme, toggleTheme } = useApp();
+  const { peerCount } = useApp();
 
   return (
     <div className="titlebar">
       <div className="titlebar-drag">
         <div className="titlebar-brand">
-          <div className="brand-dot" />
+          <img src={appIconUrl} alt="" className="brand-logo" width={18} height={18} />
           <span>BlueTalk</span>
         </div>
       </div>
@@ -24,13 +25,6 @@ function TitleBar() {
         <span className={peerCount > 0 ? 'online-dot' : 'offline-dot'} />
         <span>{peerCount} peer{peerCount !== 1 ? 's' : ''}</span>
       </div>
-      <button
-        className="tb-btn"
-        onClick={toggleTheme}
-        title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-      >
-        {theme === 'dark' ? 'Light' : 'Dark'}
-      </button>
       <div className="titlebar-controls">
         <button onClick={() => window.bluetalk?.window.minimize()} className="tb-btn" title="Minimize">
           −
@@ -85,6 +79,7 @@ export default function App() {
     autoDownloadUpdates: true,
     minimizeToTray: true,
     theme: 'dark',
+    debugMode: false,
   });
   const messageCacheRef = useRef({});
 

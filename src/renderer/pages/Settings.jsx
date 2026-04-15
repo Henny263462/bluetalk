@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../App';
+import { APP_VERSION } from '../appVersion';
 import {
   ArrowUpCircle,
   Bell,
+  Bug,
   Cable,
   Check,
   Copy,
@@ -18,6 +20,8 @@ import {
   TestTube2,
   User,
 } from 'lucide-react';
+
+const ICON_STROKE = 1.75;
 
 function formatDateTime(timestamp) {
   if (!timestamp) return 'Never';
@@ -201,14 +205,24 @@ export default function SettingsPage() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1><Settings2 size={18} style={{ marginRight: 8, verticalAlign: 'text-top' }} />Settings</h1>
+        <h1 className="page-title-row">
+          <span className="page-title-icon" aria-hidden>
+            <Settings2 size={18} strokeWidth={ICON_STROKE} />
+          </span>
+          Settings
+        </h1>
         <p>Configure your BlueTalk instance</p>
       </div>
 
       <div className="page-body">
         <section style={{ marginBottom: 28 }}>
           <div className="section-title">
-            <h3><User size={14} />Identity</h3>
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <User size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Identity
+            </h3>
           </div>
           <div className="card flex flex-col gap-3">
             <div className="input-group">
@@ -229,9 +243,15 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        {local.debugMode && (
         <section style={{ marginBottom: 28 }}>
           <div className="section-title">
-            <h3><Network size={14} />Network</h3>
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <Network size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Network
+            </h3>
           </div>
           <div className="card flex flex-col gap-3">
             {peerInfo && (
@@ -246,7 +266,7 @@ export default function SettingsPage() {
                       style={{ color: 'var(--fg-1)' }}
                     />
                     <button className="btn btn-secondary btn-icon" onClick={copyAddress} title="Copy address">
-                      {copied ? <Check size={15} /> : <Copy size={15} />}
+                      {copied ? <Check size={15} strokeWidth={ICON_STROKE} /> : <Copy size={15} strokeWidth={ICON_STROKE} />}
                     </button>
                   </div>
                 </div>
@@ -290,7 +310,7 @@ export default function SettingsPage() {
                   disabled={testingPorts}
                   title="Test common ports in restrictive networks"
                 >
-                  <TestTube2 size={15} />
+                  <TestTube2 size={15} strokeWidth={ICON_STROKE} />
                   {testingPorts ? 'Testing ports...' : 'Test ports'}
                 </button>
                 {portDiagnostics?.recommendedPort ? (
@@ -302,13 +322,18 @@ export default function SettingsPage() {
 
               {portDiagnostics && (
                 <div className="code-block" style={{ marginTop: 8 }}>
-                  <div><Globe size={13} style={{ display: 'inline-block', marginRight: 6, verticalAlign: 'text-top' }} />Host: {portDiagnostics.host}</div>
+                  <div className="flex items-center gap-2">
+                    <Globe size={14} strokeWidth={ICON_STROKE} className="text-muted" style={{ flexShrink: 0 }} aria-hidden />
+                    <span>Host: {portDiagnostics.host}</span>
+                  </div>
                   <div style={{ marginTop: 4 }}>
                     {portDiagnostics.checks.map((check) => (
-                      <div key={check.port}>
-                        <Cable size={12} style={{ display: 'inline-block', marginRight: 6, verticalAlign: 'text-top' }} />
+                      <div key={check.port} className="flex items-center gap-2" style={{ marginTop: 2 }}>
+                        <Cable size={14} strokeWidth={ICON_STROKE} className="text-muted" style={{ flexShrink: 0 }} aria-hidden />
+                        <span>
                         Port {check.port}: {check.status === 'open' ? 'open' : 'blocked'}
                         {check.code ? ` (${check.code})` : ''}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -337,10 +362,16 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+        )}
 
         <section style={{ marginBottom: 28 }}>
           <div className="section-title">
-            <h3><ArrowUpCircle size={14} />Updates</h3>
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <ArrowUpCircle size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Updates
+            </h3>
           </div>
           <div className="card">
             <div className="toggle-row">
@@ -376,7 +407,7 @@ export default function SettingsPage() {
             <div className="updater-panel">
               <div className="card-row" style={{ alignItems: 'flex-start' }}>
                 <div style={{ minWidth: 0 }}>
-                  <div className="font-medium" style={{ fontSize: 13.5 }}>BlueTalk {updaterState?.currentVersion || settings.version || '1.0.1'}</div>
+                  <div className="font-medium" style={{ fontSize: 13.5 }}>BlueTalk {updaterState?.currentVersion || APP_VERSION}</div>
                   <p className="text-sm text-muted" style={{ marginTop: 4 }}>
                     {updaterState?.message || 'Check for updates manually or let BlueTalk check in the background.'}
                   </p>
@@ -389,7 +420,7 @@ export default function SettingsPage() {
               <div className="updater-grid">
                 <div className="input-group">
                   <label>Current Version</label>
-                  <input className="input font-mono" value={updaterState?.currentVersion || '1.0.1'} readOnly />
+                  <input className="input font-mono" value={updaterState?.currentVersion || APP_VERSION} readOnly />
                 </div>
                 <div className="input-group">
                   <label>Latest Release</label>
@@ -431,20 +462,20 @@ export default function SettingsPage() {
 
               <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
                 <button className="btn btn-secondary" onClick={checkForUpdates} disabled={isCheckingUpdates || isDownloadingUpdate}>
-                  <RefreshCw size={15} />
+                  <RefreshCw size={15} strokeWidth={ICON_STROKE} />
                   {isCheckingUpdates ? 'Checking...' : 'Check now'}
                 </button>
 
                 {showManualDownload && (
                   <button className="btn btn-secondary" onClick={downloadUpdate} disabled={isDownloadingUpdate}>
-                    <Download size={15} />
+                    <Download size={15} strokeWidth={ICON_STROKE} />
                     {isDownloadingUpdate ? 'Downloading...' : 'Download update'}
                   </button>
                 )}
 
                 {showInstallAction && (
                   <button className="btn btn-primary" onClick={installUpdate}>
-                    <RotateCw size={15} />
+                    <RotateCw size={15} strokeWidth={ICON_STROKE} />
                     Restart and install
                   </button>
                 )}
@@ -455,12 +486,20 @@ export default function SettingsPage() {
 
         <section style={{ marginBottom: 28 }}>
           <div className="section-title">
-            <h3><Server size={14} />Application</h3>
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <Server size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Application
+            </h3>
           </div>
           <div className="card">
             <div className="toggle-row">
               <div className="toggle-row-info">
-                <span><Bell size={14} style={{ marginRight: 6, verticalAlign: 'text-top' }} />Windows Notifications</span>
+                <span className="toggle-row-label-with-icon">
+                  <Bell size={15} strokeWidth={ICON_STROKE} aria-hidden />
+                  Windows Notifications
+                </span>
                 <span>Show system notifications for diagnostics and incoming events</span>
               </div>
               <button
@@ -480,7 +519,7 @@ export default function SettingsPage() {
                 <span>Switch between light and dark mode</span>
               </div>
               <button className="btn btn-secondary btn-sm" onClick={toggleTheme}>
-                {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+                {theme === 'dark' ? <Sun size={15} strokeWidth={ICON_STROKE} /> : <Moon size={15} strokeWidth={ICON_STROKE} />}
                 {theme === 'dark' ? 'Light' : 'Dark'}
               </button>
             </div>
@@ -495,6 +534,24 @@ export default function SettingsPage() {
                   type="checkbox"
                   checked={local.minimizeToTray ?? true}
                   onChange={(e) => change('minimizeToTray', e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span className="toggle-row-label-with-icon">
+                  <Bug size={15} strokeWidth={ICON_STROKE} aria-hidden />
+                  Debug mode
+                </span>
+                <span>Show the Network section (addresses, API port, port tests)</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={local.debugMode ?? false}
+                  onChange={(e) => change('debugMode', e.target.checked)}
                 />
                 <span className="toggle-slider" />
               </label>

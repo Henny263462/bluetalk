@@ -3,7 +3,6 @@ import {
   Paperclip,
   Pin,
   PinOff,
-  Plus,
   Search,
   SendHorizontal,
   Trash2,
@@ -341,9 +340,6 @@ export default function ChatsPage() {
         <div className="split-list">
           <div className="split-list-header">
             <h2>Chats</h2>
-            <button className="btn btn-ghost btn-sm" onClick={() => setShowConnect(true)} title="Connect to peer">
-              <Plus size={16} />
-            </button>
           </div>
           <div style={{ padding: '8px 12px' }}>
             <div className="search-bar">

@@ -282,13 +282,36 @@ function installDownloadedUpdate() {
   isQuitting = true;
   peerServer?.stop();
   apiServer?.stop();
-  autoUpdater.quitAndInstall(false, true);
+  // Silent NSIS (/S) + --force-run: no setup wizard; app restarts after install (Windows).
+  autoUpdater.quitAndInstall(true, true);
   return true;
+}
+
+function installPendingUpdateOnQuit(_event, exitCode) {
+  if (process.platform !== 'win32' || exitCode !== 0) return;
+  const support = getUpdaterSupport();
+  if (!support.supported) return;
+  const prefs = getUpdaterPreferences();
+  if (!prefs.autoUpdateEnabled) return;
+  if (updateState.status !== 'downloaded') return;
+  if (autoUpdater.quitAndInstallCalled) return;
+
+  try {
+    // Default electron-updater uses install(true, false) here — silent but no relaunch.
+    autoUpdater.install(true, true);
+  } catch (_err) {
+    /* ignore */
+  }
 }
 
 function setupAutoUpdater() {
   if (updaterReady) return;
   updaterReady = true;
+
+  if (process.platform === 'win32') {
+    autoUpdater.autoInstallOnAppQuit = false;
+    app.on('quit', installPendingUpdateOnQuit);
+  }
 
   autoUpdater.on('checking-for-update', () => {
     patchUpdateState({

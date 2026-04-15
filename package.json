@@ -1,19 +1,18 @@
 {
   "name": "bluetalk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Peer-to-peer chat app designed for stealth, performance, and restricted networks",
   "main": "src/main/main.js",
   "scripts": {
-    "dev": "concurrently \"bun run dev:renderer\" \"bun run dev:electron\"",
-    "dev:renderer": "vite",
-    "dev:electron": "node scripts/wait-vite.js && electron .",
-    "build:renderer": "vite build",
-    "build": "npm run build:renderer && electron-builder",
-    "preview": "vite preview"
+    "dev": "node scripts/dev.js",
+    "dev:renderer": "node node_modules/vite/bin/vite.js",
+    "dev:electron": "node scripts/dev-electron.js",
+    "build:renderer": "node node_modules/vite/bin/vite.js build",
+    "build": "npm run build:renderer && node node_modules/electron-builder/cli.js",
+    "preview": "node node_modules/vite/bin/vite.js preview"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "concurrently": "^8.2.2",
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1",
     "vite": "^5.0.10"
