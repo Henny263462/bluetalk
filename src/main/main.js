@@ -1,4 +1,5 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification, dialog } = require('electron');
+const fs = require('fs/promises');
 const { autoUpdater } = require('electron-updater');
 const net = require('net');
 const path = require('path');
@@ -627,10 +628,36 @@ function setupIPC() {
   ipcMain.handle('peer:send', (_, peerId, data) => peerServer.sendTo(peerId, data));
   ipcMain.handle('peer:broadcast', (_, data) => peerServer.broadcast(data));
   ipcMain.handle('peer:getPeers', () => peerServer.getPeers());
+  ipcMain.handle('peer:refreshDiscovery', () => {
+    peerServer.refreshDiscovery();
+  });
 
   ipcMain.handle('file:host', (_, fileMeta) => peerServer.hostFile(fileMeta));
   ipcMain.handle('file:getHosted', () => peerServer.getHostedFiles());
   ipcMain.handle('file:request', (_, peerId, fileId) => peerServer.requestFile(peerId, fileId));
+  try {
+    ipcMain.removeHandler('file:saveAs');
+  } catch {
+    /* ignore if not registered */
+  }
+  ipcMain.handle('file:saveAs', async (_, { defaultFilename, base64 } = {}) => {
+    if (typeof base64 !== 'string' || !base64.length) {
+      return { ok: false, error: 'invalid_payload' };
+    }
+    const name =
+      typeof defaultFilename === 'string' && defaultFilename.trim() ? defaultFilename.trim() : 'download';
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      defaultPath: name,
+      filters: [{ name: 'All Files', extensions: ['*'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    try {
+      await fs.writeFile(filePath, Buffer.from(base64, 'base64'));
+      return { ok: true, filePath };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'write_failed' };
+    }
+  });
 
   ipcMain.handle('notify:show', (_, payload = {}) => {
     return showWindowsNotification(payload.title || 'BlueTalk', payload.body || '');

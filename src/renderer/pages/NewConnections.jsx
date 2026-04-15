@@ -1,18 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, UserPlus, Wifi, X } from 'lucide-react';
+import { RefreshCw, Search, UserPlus } from 'lucide-react';
 import { useApp } from '../App';
 import { useToast } from '../components/ToastProvider';
 
 export default function NewConnectionsPage() {
   const { toast } = useToast();
-  const { peers, contacts, chatMeta, connectToAddress, upsertContact } = useApp();
+  const { peers, contacts, chatMeta, refreshDiscovery, upsertContact } = useApp();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [showConnect, setShowConnect] = useState(false);
-  const [connectAddress, setConnectAddress] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const [error, setError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
 
   const newPeerRows = useMemo(() => {
     const ids = new Set([
@@ -60,21 +57,15 @@ export default function NewConnectionsPage() {
     navigate('/', { state: { openPeerId: peerId } });
   };
 
-  const handleConnect = async () => {
-    if (!connectAddress.trim()) return;
-    setConnecting(true);
-    setError('');
+  const handleRefresh = async () => {
+    setRefreshing(true);
     try {
-      const peerInfo = await connectToAddress(connectAddress.trim());
-      setShowConnect(false);
-      setConnectAddress('');
-      navigate('/', { state: { openPeerId: peerInfo.id } });
+      await refreshDiscovery();
     } catch (err) {
-      const msg = err.message || 'Connection failed';
-      setError(msg);
-      toast({ variant: 'error', title: 'Connection failed', message: msg });
+      const msg = err?.message || 'Refresh failed';
+      toast({ variant: 'error', title: 'Refresh failed', message: msg });
     } finally {
-      setConnecting(false);
+      setRefreshing(false);
     }
   };
 
@@ -87,7 +78,10 @@ export default function NewConnectionsPage() {
           </span>
           New connections
         </h1>
-        <p>Peers you have not started a chat with yet. Open a conversation here first.</p>
+        <p>
+          Peers on your network connect automatically. Use Refresh to scan again. Open a conversation here first;
+          incoming messages from people you have not started with appear under message requests.
+        </p>
       </div>
       <div className="page-body">
         <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
@@ -100,22 +94,23 @@ export default function NewConnectionsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowConnect(true)}>
-            <Wifi size={14} />
-            Connect to peer
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Send a discovery broadcast on the LAN"
+          >
+            <RefreshCw size={14} style={refreshing ? { opacity: 0.7 } : undefined} />
+            {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
-
-        {error && (
-          <div className="chat-warning mb-3" style={{ margin: '0 0 12px' }}>
-            {error}
-          </div>
-        )}
 
         {filtered.length === 0 ? (
           <div className="card">
             <p className="text-muted text-sm">
-              No new connections. When someone connects or you add a peer without messages yet, they appear here.
+              No new connections yet. Ensure other devices are running BlueTalk on the same network, then tap Refresh.
+              Message requests from new senders appear in the bell menu.
             </p>
           </div>
         ) : (
@@ -140,43 +135,6 @@ export default function NewConnectionsPage() {
           </div>
         )}
       </div>
-
-      {showConnect && (
-        <div className="modal-overlay" onClick={() => setShowConnect(false)}>
-          <div className="modal animate-scale" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-2">
-              <h3 style={{ margin: 0 }}>Connect to peer</h3>
-              <button type="button" className="btn btn-ghost btn-icon" onClick={() => setShowConnect(false)}>
-                <X size={16} />
-              </button>
-            </div>
-            <div className="input-group">
-              <label>Address or IP</label>
-              <input
-                className="input font-mono"
-                placeholder="e.g. 192.168.1.42 or 192.168.1.42:8080"
-                value={connectAddress}
-                onChange={(e) => setConnectAddress(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-                autoFocus
-              />
-            </div>
-            <div className="modal-actions">
-              <button type="button" className="btn btn-secondary" onClick={() => setShowConnect(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleConnect}
-                disabled={!connectAddress.trim() || connecting}
-              >
-                {connecting ? 'Connecting...' : 'Connect'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

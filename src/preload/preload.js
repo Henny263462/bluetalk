@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
     send: (peerId, data) => ipcRenderer.invoke('peer:send', peerId, data),
     broadcast: (data) => ipcRenderer.invoke('peer:broadcast', data),
     getPeers: () => ipcRenderer.invoke('peer:getPeers'),
+    refreshDiscovery: () => ipcRenderer.invoke('peer:refreshDiscovery'),
   },
 
   // File operations
@@ -43,6 +44,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
     host: (fileMeta) => ipcRenderer.invoke('file:host', fileMeta),
     getHosted: () => ipcRenderer.invoke('file:getHosted'),
     request: (peerId, fileId) => ipcRenderer.invoke('file:request', peerId, fileId),
+    saveAs: (payload) => ipcRenderer.invoke('file:saveAs', payload),
   },
 
   // Native notifications

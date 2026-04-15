@@ -371,6 +371,13 @@ export default function App() {
     return peerInfo;
   }, [upsertContact]);
 
+  const refreshDiscovery = useCallback(async () => {
+    if (!window.bluetalk) return;
+    await window.bluetalk.peer.refreshDiscovery();
+    const list = await window.bluetalk.peer.getPeers();
+    setPeers(list || []);
+  }, []);
+
   const acceptMessageRequest = useCallback((peerId) => {
     if (!peerId) return;
     upsertContact({ id: peerId, pendingMessageRequest: false });
@@ -449,6 +456,7 @@ export default function App() {
     sendMessage,
     loadChatMessages,
     connectToAddress,
+    refreshDiscovery,
     setContactNickname,
     setChatPinned,
     deleteChat,

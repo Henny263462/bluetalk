@@ -30,6 +30,10 @@ const PORT_CANDIDATES = [
 ];
 
 const MAX_LISTEN_PORTS = 4;
+/** Data URLs for avatars can exceed 200k chars (see ProfileMenu MAX_AVATAR_BYTES); keep handshake/profile sync usable. */
+const MAX_PROFILE_PICTURE_DATA_URL_CHARS = 2 * 1024 * 1024;
+/** Reject absurd frames to avoid OOM (chat attachments are large but not multi‑GB over this JSON transport). */
+const MAX_WEBSOCKET_PAYLOAD_BYTES = 80 * 1024 * 1024;
 const DISCOVERY_PORT = 41234;
 const DISCOVERY_INTERVAL = 5000;
 const DISCOVERY_MAGIC = 'BLUETALK_V2';
@@ -69,7 +73,8 @@ class PeerServer extends EventEmitter {
     const profilePicture = this.store.get('settings.profilePicture', '') || '';
     return {
       bio: typeof bio === 'string' ? bio.slice(0, 500) : '',
-      profilePicture: typeof profilePicture === 'string' ? profilePicture.slice(0, 200000) : '',
+      profilePicture:
+        typeof profilePicture === 'string' ? profilePicture.slice(0, MAX_PROFILE_PICTURE_DATA_URL_CHARS) : '',
     };
   }
 
@@ -350,6 +355,11 @@ class PeerServer extends EventEmitter {
     }
   }
 
+  /** Send an immediate discovery broadcast (same as the periodic LAN beacon). */
+  refreshDiscovery() {
+    this._broadcastPresence();
+  }
+
   _broadcastPresence(targetAddresses = null, extraPayload = {}) {
     if (!this.discoverySocket || this.ports.length === 0) return;
 
@@ -552,51 +562,55 @@ class PeerServer extends EventEmitter {
           ...this._getProfileFields(),
         }));
 
-        socket.on('data', (buffer) => {
-          const message = this._decodeFrame(buffer);
-          if (!message) return;
+        socket._bluetalkWsRx = Buffer.alloc(0);
+        socket.on('data', (chunk) => {
+          socket._bluetalkWsRx = Buffer.concat([socket._bluetalkWsRx, chunk]);
+          this._pumpWebSocketRx(socket, (message) => {
+            try {
+              const data = JSON.parse(message);
 
-          try {
-            const data = JSON.parse(message);
+              if (data.type === 'handshake-ack') {
+                peerId = data.peerId;
 
-            if (data.type === 'handshake-ack') {
-              peerId = data.peerId;
+                if (this.peers.has(peerId)) {
+                  socket.destroy();
+                  finishResolve(this.peers.get(peerId).info);
+                  return;
+                }
 
-              if (this.peers.has(peerId)) {
-                socket.destroy();
-                finishResolve(this.peers.get(peerId).info);
+                const info = {
+                  id: peerId,
+                  name: data.name || descriptor.name || 'Unknown',
+                  address: this._normalizeAddress(candidate.host),
+                  port: data.port || candidate.port,
+                  ports: this._normalizePortList(data.ports, data.port, candidate.port),
+                  connectedAt: Date.now(),
+                  bio: typeof data.bio === 'string' ? data.bio.slice(0, 500) : '',
+                  profilePicture:
+                    typeof data.profilePicture === 'string'
+                      ? data.profilePicture.slice(0, MAX_PROFILE_PICTURE_DATA_URL_CHARS)
+                      : '',
+                };
+
+                this.peers.set(peerId, { socket, info });
+                this._mergePeerDiscovery(peerId, info);
+                this.emit('peer:connected', info);
+                finishResolve(info);
                 return;
               }
 
-              const info = {
-                id: peerId,
-                name: data.name || descriptor.name || 'Unknown',
-                address: this._normalizeAddress(candidate.host),
-                port: data.port || candidate.port,
-                ports: this._normalizePortList(data.ports, data.port, candidate.port),
-                connectedAt: Date.now(),
-                bio: typeof data.bio === 'string' ? data.bio.slice(0, 500) : '',
-                profilePicture: typeof data.profilePicture === 'string' ? data.profilePicture.slice(0, 200000) : '',
-              };
+              if (data.type === 'message') {
+                this.emit('peer:message', { from: peerId, ...data });
+                return;
+              }
 
-              this.peers.set(peerId, { socket, info });
-              this._mergePeerDiscovery(peerId, info);
-              this.emit('peer:connected', info);
-              finishResolve(info);
-              return;
+              if (data.type === 'file-offer') {
+                this.emit('peer:file-offered', { from: peerId, ...data });
+              }
+            } catch (e) {
+              console.error('[PeerServer] Parse error:', e.message);
             }
-
-            if (data.type === 'message') {
-              this.emit('peer:message', { from: peerId, ...data });
-              return;
-            }
-
-            if (data.type === 'file-offer') {
-              this.emit('peer:file-offered', { from: peerId, ...data });
-            }
-          } catch (e) {
-            console.error('[PeerServer] Parse error:', e.message);
-          }
+          });
         });
 
         const cleanup = () => {
@@ -637,9 +651,8 @@ class PeerServer extends EventEmitter {
 
     let peerId = null;
 
-    socket.on('data', (buffer) => {
-      const message = this._decodeFrame(buffer);
-      if (!message) return;
+    socket._bluetalkWsRx = head && head.length ? Buffer.from(head) : Buffer.alloc(0);
+    const onWsText = (message) => {
       try {
         const data = JSON.parse(message);
         if (data.type === 'handshake') {
@@ -658,7 +671,10 @@ class PeerServer extends EventEmitter {
             ports: this._normalizePortList(data.ports, data.port),
             connectedAt: Date.now(),
             bio: typeof data.bio === 'string' ? data.bio.slice(0, 500) : '',
-            profilePicture: typeof data.profilePicture === 'string' ? data.profilePicture.slice(0, 200000) : '',
+            profilePicture:
+              typeof data.profilePicture === 'string'
+                ? data.profilePicture.slice(0, MAX_PROFILE_PICTURE_DATA_URL_CHARS)
+                : '',
           };
 
           this.peers.set(peerId, { socket, info });
@@ -685,6 +701,12 @@ class PeerServer extends EventEmitter {
       } catch (e) {
         console.error('[PeerServer] Parse error:', e.message);
       }
+    };
+
+    this._pumpWebSocketRx(socket, onWsText);
+    socket.on('data', (chunk) => {
+      socket._bluetalkWsRx = Buffer.concat([socket._bluetalkWsRx, chunk]);
+      this._pumpWebSocketRx(socket, onWsText);
     });
 
     const cleanup = () => {
@@ -718,34 +740,85 @@ class PeerServer extends EventEmitter {
     return Buffer.concat([Buffer.from(frame), payload]);
   }
 
-  _decodeFrame(buffer) {
+  /**
+   * Consume complete WebSocket frames from an accumulated TCP buffer (handles fragmented TCP packets).
+   * @param {import('net').Socket} socket
+   * @param {(utf8: string) => void} onTextPayload
+   */
+  _pumpWebSocketRx(socket, onTextPayload) {
+    let rx = socket._bluetalkWsRx;
+    if (!rx || rx.length === 0) return;
+
+    while (true) {
+      const decoded = this._decodeOneWebSocketFrame(rx);
+      if (decoded === null) break;
+      rx = rx.subarray(decoded.bytesConsumed);
+      if (decoded.skip) continue;
+      onTextPayload(decoded.text);
+    }
+    socket._bluetalkWsRx = rx;
+  }
+
+  /**
+   * @returns {null | { bytesConsumed: number, skip?: true, text?: string }}
+   */
+  _decodeOneWebSocketFrame(buffer) {
     if (buffer.length < 2) return null;
+
+    const opcode = buffer[0] & 0x0f;
+    const fin = (buffer[0] & 0x80) !== 0;
     const secondByte = buffer[1];
     const isMasked = (secondByte & 0x80) !== 0;
     let payloadLength = secondByte & 0x7f;
     let offset = 2;
 
     if (payloadLength === 126) {
+      if (buffer.length < 4) return null;
       payloadLength = buffer.readUInt16BE(2);
       offset = 4;
     } else if (payloadLength === 127) {
-      payloadLength = Number(buffer.readBigUInt64BE(2));
+      if (buffer.length < 10) return null;
+      const bigLen = buffer.readBigUInt64BE(2);
       offset = 10;
+      const maskBytes = isMasked ? 4 : 0;
+      const totalFrame = BigInt(offset + maskBytes) + bigLen;
+      if (totalFrame > BigInt(buffer.length)) return null;
+      if (bigLen > BigInt(MAX_WEBSOCKET_PAYLOAD_BYTES)) {
+        return { bytesConsumed: Number(totalFrame), skip: true };
+      }
+      payloadLength = Number(bigLen);
     }
 
     let mask = null;
     if (isMasked) {
-      mask = buffer.slice(offset, offset + 4);
+      if (buffer.length < offset + 4) return null;
+      mask = buffer.subarray(offset, offset + 4);
       offset += 4;
     }
 
-    const payload = buffer.slice(offset, offset + payloadLength);
+    const frameEnd = offset + payloadLength;
+    if (buffer.length < frameEnd) return null;
+
+    let payload = buffer.subarray(offset, frameEnd);
     if (isMasked && mask) {
+      payload = Buffer.from(payload);
       for (let i = 0; i < payload.length; i++) {
         payload[i] ^= mask[i % 4];
       }
     }
-    return payload.toString('utf-8');
+
+    if (opcode !== 0x01) {
+      return { bytesConsumed: frameEnd, skip: true };
+    }
+    if (!fin) {
+      console.warn('[PeerServer] Ignoring fragmented text WebSocket frame');
+      return { bytesConsumed: frameEnd, skip: true };
+    }
+
+    return {
+      bytesConsumed: frameEnd,
+      text: payload.toString('utf8'),
+    };
   }
 
   _wsSend(socket, data) {

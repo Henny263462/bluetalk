@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Archive,
-  Download,
   File,
   FileCode,
   FileImage,
@@ -15,6 +14,7 @@ import {
   Pin,
   PinOff,
   FileBarChart,
+  Save,
   Search,
   SendHorizontal,
   Trash2,
@@ -35,6 +35,22 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function downloadBase64AsFile(fileName, base64) {
+  const bin = atob(base64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i += 1) bytes[i] = bin.charCodeAt(i);
+  const blob = new Blob([bytes]);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName || 'download';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function PeerAvatar({ pictureUrl, name, size = 36, className = '' }) {
@@ -81,9 +97,32 @@ function readFileAsData(file) {
   });
 }
 
+const EXT_TO_IMAGE_MIME = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+};
+
+/** Browsers often omit `image/*` (empty type → octet-stream); pick a concrete image/* for data URLs. */
+function imageMimeForFile(mime, fileName) {
+  const m = String(mime || '').toLowerCase();
+  if (m.startsWith('image/')) return m;
+  if (m && m !== 'application/octet-stream') return '';
+  const ext = extOf(fileName);
+  return EXT_TO_IMAGE_MIME[ext] || '';
+}
+
 function getFileBlobUrl(message) {
   if (!message || message.kind !== 'file' || !message.fileData) return '';
-  const type = message.fileType || 'application/octet-stream';
+  const mime = message.fileType || 'application/octet-stream';
+  const category = getFileCategory(mime, message.fileName);
+  const type =
+    category === 'image' ? imageMimeForFile(mime, message.fileName) || mime : mime;
   return `data:${type};base64,${message.fileData}`;
 }
 
@@ -91,9 +130,13 @@ function getImageUrl(message) {
   if (!message) return '';
 
   if (message.kind === 'file') {
-    const type = message.fileType || 'application/octet-stream';
-    if (!type.startsWith('image/') || !message.fileData) return '';
-    return `data:${type};base64,${message.fileData}`;
+    const mime = message.fileType || 'application/octet-stream';
+    if (!message.fileData) return '';
+    const category = getFileCategory(mime, message.fileName);
+    if (category !== 'image') return '';
+    const imageMime = imageMimeForFile(mime, message.fileName);
+    if (!imageMime) return '';
+    return `data:${imageMime};base64,${message.fileData}`;
   }
 
   const content = String(message.content || '').trim();
@@ -124,6 +167,17 @@ function getFileCategory(mime, fileName) {
   }
 
   return 'other';
+}
+
+/** Bild-Only-Nachrichten: ohne Sprechblasen-Hintergrund, direkt im Verlauf */
+function isBareMediaMessage(message) {
+  if (!message) return false;
+  if (message.kind === 'file') {
+    const mime = message.fileType || 'application/octet-stream';
+    if (getFileCategory(mime, message.fileName) !== 'image') return false;
+    return Boolean(getImageUrl(message));
+  }
+  return Boolean(getImageUrl(message));
 }
 
 function FileTypeIcon({ mime, fileName, size = 22 }) {
@@ -167,7 +221,7 @@ function FileTypeIcon({ mime, fileName, size = 22 }) {
   return <File {...common} />;
 }
 
-function FileMessage({ message }) {
+function FileMessage({ message, bareLayout = false, onExpandImage, onSaveToDisk }) {
   const dataUrl = getFileBlobUrl(message);
   const mime = message.fileType || 'application/octet-stream';
   const category = getFileCategory(mime, message.fileName);
@@ -179,12 +233,54 @@ function FileMessage({ message }) {
   const showMediaFooter = (category === 'video' || category === 'audio') && hasPayload;
   const showImageMeta = showImagePreview;
 
+  const openImage = () => {
+    if (!imageUrl) return;
+    onExpandImage?.({
+      src: imageUrl,
+      alt: message.fileName || 'Bildanhang',
+      defaultFilename: message.fileName || 'Bild',
+      base64: message.fileData || '',
+    });
+  };
+
+  const iconRowInner = (
+    <>
+      <div className="msg-file-icon-wrap">
+        <FileTypeIcon mime={mime} fileName={message.fileName} />
+      </div>
+      <div className="msg-file-meta-block">
+        <div className="msg-file-name" title={message.fileName || ''}>
+          {message.fileName || 'Anhang'}
+        </div>
+        <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
+      </div>
+    </>
+  );
+
+  if (bareLayout && showImagePreview) {
+    return (
+      <div className="msg-bare-media-stack">
+        <button type="button" className="msg-bare-image-link" onClick={openImage}>
+          <img src={imageUrl} alt={message.fileName || 'Bildanhang'} className="msg-file-image" loading="lazy" />
+        </button>
+        {(message.fileName || message.fileSize) && (
+          <div className="msg-bare-media-caption">
+            <span className="msg-bare-caption-name" title={message.fileName || ''}>
+              {message.fileName || 'Bildanhang'}
+              {message.fileSize ? ` · ${formatSize(message.fileSize)}` : ''}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={`msg-file msg-file--${category}`}>
       {showImagePreview && (
-        <a href={imageUrl} target="_blank" rel="noreferrer" className="msg-file-image-link">
+        <button type="button" className="msg-file-image-link" onClick={openImage}>
           <img src={imageUrl} alt={message.fileName || 'Bildanhang'} className="msg-file-image" loading="lazy" />
-        </a>
+        </button>
       )}
 
       {category === 'video' && hasPayload && (
@@ -195,19 +291,14 @@ function FileMessage({ message }) {
         <audio src={dataUrl} controls className="msg-file-audio" preload="metadata" />
       )}
 
-      {showIconRow && (
-        <div className="msg-file-row">
-          <div className="msg-file-icon-wrap">
-            <FileTypeIcon mime={mime} fileName={message.fileName} />
-          </div>
-          <div className="msg-file-meta-block">
-            <div className="msg-file-name" title={message.fileName || ''}>
-              {message.fileName || 'Anhang'}
-            </div>
-            <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
-          </div>
-        </div>
-      )}
+      {showIconRow &&
+        (message.fileData ? (
+          <button type="button" className="msg-file-row msg-file-save-trigger" onClick={() => onSaveToDisk?.(message)}>
+            {iconRowInner}
+          </button>
+        ) : (
+          <div className="msg-file-row">{iconRowInner}</div>
+        ))}
 
       {showImageMeta && (
         <div className="msg-file-footer msg-file-footer--image">
@@ -228,32 +319,88 @@ function FileMessage({ message }) {
             </div>
             <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
           </div>
+          {message.fileData && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm msg-file-save-inline"
+              onClick={() => onSaveToDisk?.(message)}
+            >
+              Speichern unter…
+            </button>
+          )}
         </div>
-      )}
-
-      {message.fileData && (
-        <a
-          href={dataUrl}
-          download={message.fileName || 'file'}
-          className="msg-file-download"
-          title="Datei herunterladen"
-        >
-          <Download size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-          <span>Download</span>
-        </a>
       )}
     </div>
   );
 }
 
-function ChatMessage({ message }) {
+function ChatMessage({ message, onExpandImage }) {
   const imageUrl = getImageUrl(message);
   if (!imageUrl) return <div>{message.content}</div>;
 
+  const open = () => {
+    const base64 = imageUrl.startsWith('data:') ? imageUrl.split(',')[1] || '' : '';
+    onExpandImage?.({
+      src: imageUrl,
+      alt: 'Geteiltes Bild',
+      defaultFilename: 'Bild',
+      base64,
+    });
+  };
+
   return (
-    <a href={imageUrl} target="_blank" rel="noreferrer" className="msg-inline-image-link">
-      <img src={imageUrl} alt="Shared image" className="msg-inline-image" />
-    </a>
+    <button type="button" className="msg-inline-image-link" onClick={open}>
+      <img src={imageUrl} alt="Geteiltes Bild" className="msg-inline-image" />
+    </button>
+  );
+}
+
+function MediaLightbox({ open, src, alt, canSave, onClose, onSave }) {
+  if (!open) return null;
+  return (
+    <div
+      className="media-lightbox-overlay"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Medienvorschau"
+    >
+      <div
+        className="media-lightbox-toolbar"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {canSave ? (
+          <button
+            type="button"
+            className="media-lightbox-save"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSave();
+            }}
+          >
+            <Save size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden className="media-lightbox-save-icon" />
+            <span>Speichern unter…</span>
+          </button>
+        ) : (
+          <span className="media-lightbox-toolbar-spacer" aria-hidden />
+        )}
+        <button
+          type="button"
+          className="btn btn-ghost btn-icon media-lightbox-close"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label="Schließen"
+        >
+          <X size={22} strokeWidth={CHAT_ICON_STROKE} />
+        </button>
+      </div>
+      <div className="media-lightbox-stage" onClick={(e) => e.stopPropagation()}>
+        <img src={src} alt={alt} className="media-lightbox-img" />
+      </div>
+    </div>
   );
 }
 
@@ -295,6 +442,7 @@ export default function ChatsPage() {
 
   const [pendingFile, setPendingFile] = useState(null);
   const [readingFile, setReadingFile] = useState(false);
+  const [mediaLightbox, setMediaLightbox] = useState(null);
 
   const endRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -418,6 +566,67 @@ export default function ChatsPage() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [newestTimestamp, selectedPeerId]);
+
+  useEffect(() => {
+    if (!mediaLightbox) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setMediaLightbox(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mediaLightbox]);
+
+  const saveAttachmentToDisk = async (fileName, base64) => {
+    if (!base64) return;
+    const name = fileName || 'download';
+
+    if (window.bluetalk?.file?.saveAs) {
+      try {
+        const res = await window.bluetalk.file.saveAs({
+          defaultFilename: name,
+          base64,
+        });
+        if (res?.ok) {
+          toast({ variant: 'success', title: 'Datei gespeichert' });
+          return;
+        }
+        if (res && !res.canceled && res.error) {
+          toast({ variant: 'error', title: 'Speichern fehlgeschlagen', message: res.error });
+          return;
+        }
+        if (res?.canceled) return;
+      } catch (e) {
+        const msg = e?.message || '';
+        if (!/no handler registered|ERR_HANDLER_NOT_REGISTERED/i.test(msg)) {
+          toast({ variant: 'error', title: 'Speichern fehlgeschlagen', message: msg });
+          return;
+        }
+        /* Main-Prozess oft veraltet (Dev ohne vollständigen Neustart): Fallback-Download */
+      }
+    }
+
+    try {
+      downloadBase64AsFile(name, base64);
+      toast({
+        variant: 'success',
+        title: 'Download gestartet',
+        message: window.bluetalk?.file?.saveAs
+          ? 'Vollständigen Electron-Neustart ausführen, damit „Speichern unter“ wieder den Systemdialog nutzt.'
+          : undefined,
+      });
+    } catch (e) {
+      toast({
+        variant: 'error',
+        title: 'Download fehlgeschlagen',
+        message: e?.message || 'Unbekannter Fehler.',
+      });
+    }
+  };
+
+  const saveFileMessage = (message) => {
+    if (!message?.fileData) return;
+    saveAttachmentToDisk(message.fileName || 'download', message.fileData);
+  };
 
   const send = async () => {
     if (!selectedPeer) return;
@@ -554,6 +763,17 @@ export default function ChatsPage() {
 
   return (
     <div className="page">
+      <MediaLightbox
+        open={Boolean(mediaLightbox)}
+        src={mediaLightbox?.src || ''}
+        alt={mediaLightbox?.alt || ''}
+        canSave={Boolean(mediaLightbox?.base64)}
+        onClose={() => setMediaLightbox(null)}
+        onSave={() => {
+          if (!mediaLightbox?.base64) return;
+          saveAttachmentToDisk(mediaLightbox.defaultFilename || 'Bild', mediaLightbox.base64);
+        }}
+      />
       <div className="split-layout">
         <div className="split-list">
           <div className="split-list-header">
@@ -685,15 +905,31 @@ export default function ChatsPage() {
                   const isSelf = m.from === 'self';
                   const bubbleName = isSelf ? (settings.displayName || 'You') : (m.sender || selectedPeer.displayName);
                   const bubblePic = isSelf ? settings.profilePicture : selectedPeer.profilePicture;
+                  const bareMedia = isBareMediaMessage(m);
                   return (
                     <div
                       key={`${m.timestamp || i}-${m.from || 'msg'}-${i}`}
-                      className={`msg-row ${isSelf ? 'msg-row-self' : 'msg-row-other'}`}
+                      className={['msg-row', isSelf ? 'msg-row-self' : 'msg-row-other', bareMedia && 'msg-row--bare']
+                        .filter(Boolean)
+                        .join(' ')}
                     >
                       <PeerAvatar pictureUrl={bubblePic} name={bubbleName} size={28} className="msg-avatar" />
-                      <div className={`msg ${isSelf ? 'msg-self' : 'msg-other'} animate-in`}>
+                      <div
+                        className={['msg', isSelf ? 'msg-self' : 'msg-other', bareMedia && 'msg--bare-media', 'animate-in']
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
                         {!isSelf && <div className="msg-sender">{m.sender || m.from}</div>}
-                        {m.kind === 'file' ? <FileMessage message={m} /> : <ChatMessage message={m} />}
+                        {m.kind === 'file' ? (
+                          <FileMessage
+                            message={m}
+                            bareLayout={bareMedia}
+                            onExpandImage={setMediaLightbox}
+                            onSaveToDisk={saveFileMessage}
+                          />
+                        ) : (
+                          <ChatMessage message={m} onExpandImage={setMediaLightbox} />
+                        )}
                         <div className="msg-time">{formatTime(m.timestamp)}</div>
                       </div>
                     </div>
@@ -711,12 +947,6 @@ export default function ChatsPage() {
                     <div className="pending-file-name">{pendingFile.name}</div>
                     <div className="pending-file-meta">{formatSize(pendingFile.size)}</div>
                   </div>
-                  {pendingFile.type.startsWith('image/') && (
-                    <img src={pendingFile.dataUrl} alt="" className="pending-file-preview" />
-                  )}
-                  {pendingFile.type.startsWith('video/') && (
-                    <video src={pendingFile.dataUrl} className="pending-file-preview pending-file-preview--video" muted playsInline preload="metadata" />
-                  )}
                   <button
                     className="btn btn-ghost btn-icon"
                     onClick={() => setPendingFile(null)}
