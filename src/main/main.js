@@ -84,6 +84,16 @@ function patchStoredChatMessage(peerId, messageId, patch) {
   return true;
 }
 
+function deleteStoredChatMessage(peerId, messageId) {
+  if (!peerId || !messageId) return false;
+  const list = getStoredChatMessages(peerId);
+  const idx = list.findIndex((m) => m && m.messageId === messageId);
+  if (idx < 0) return false;
+  list.splice(idx, 1);
+  setStoredChatMessages(peerId, list);
+  return true;
+}
+
 function getChatMessageMeta() {
   const storedMessages = getStoredMessages();
   const meta = {};
@@ -695,6 +705,9 @@ function setupIPC() {
   });
   ipcMain.handle('messages:patch', (_, peerId, messageId, patch) =>
     patchStoredChatMessage(peerId, messageId, patch)
+  );
+  ipcMain.handle('messages:deleteMessage', (_, peerId, messageId) =>
+    deleteStoredChatMessage(peerId, messageId)
   );
   ipcMain.handle('messages:deleteChat', (_, peerId) => {
     store.delete(`messages.${peerId}`);

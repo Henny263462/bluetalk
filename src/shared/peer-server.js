@@ -749,6 +749,8 @@ class PeerServer extends EventEmitter {
 
   /**
    * Consume complete WebSocket frames from an accumulated TCP buffer (handles fragmented TCP packets).
+   * Supports WebSocket continuation frames: a text frame with fin=0 starts a fragment sequence,
+   * continuation frames (opcode 0x00) carry the rest, and the final frame has fin=1.
    * @param {import('net').Socket} socket
    * @param {(utf8: string) => void} onTextPayload
    */
@@ -761,13 +763,43 @@ class PeerServer extends EventEmitter {
       if (decoded === null) break;
       rx = rx.subarray(decoded.bytesConsumed);
       if (decoded.skip) continue;
+
+      // Handle fragmented messages (continuation frames)
+      if (decoded.fragment) {
+        if (!socket._bluetalkWsFragBufs) {
+          socket._bluetalkWsFragBufs = [];
+          socket._bluetalkWsFragLen = 0;
+        }
+        socket._bluetalkWsFragBufs.push(decoded.payload);
+        socket._bluetalkWsFragLen += decoded.payload.length;
+        if (socket._bluetalkWsFragLen > MAX_WEBSOCKET_PAYLOAD_BYTES) {
+          // Accumulated fragments too large — discard
+          socket._bluetalkWsFragBufs = null;
+          socket._bluetalkWsFragLen = 0;
+        }
+        continue;
+      }
+
+      if (decoded.fragmentEnd) {
+        if (socket._bluetalkWsFragBufs) {
+          socket._bluetalkWsFragBufs.push(decoded.payload);
+          const full = Buffer.concat(socket._bluetalkWsFragBufs);
+          socket._bluetalkWsFragBufs = null;
+          socket._bluetalkWsFragLen = 0;
+          if (full.length <= MAX_WEBSOCKET_PAYLOAD_BYTES) {
+            onTextPayload(full.toString('utf8'));
+          }
+        }
+        continue;
+      }
+
       onTextPayload(decoded.text);
     }
     socket._bluetalkWsRx = rx;
   }
 
   /**
-   * @returns {null | { bytesConsumed: number, skip?: true, text?: string }}
+   * @returns {null | { bytesConsumed: number, skip?: true, text?: string, fragment?: true, fragmentEnd?: true, payload?: Buffer }}
    */
   _decodeOneWebSocketFrame(buffer) {
     if (buffer.length < 2) return null;
@@ -814,11 +846,21 @@ class PeerServer extends EventEmitter {
       }
     }
 
-    if (opcode !== 0x01) {
-      return { bytesConsumed: frameEnd, skip: true };
+    // Opcode 0x01 = text, 0x00 = continuation, 0x08 = close, 0x09 = ping, 0x0A = pong
+    if (opcode === 0x01 && !fin) {
+      // Start of a fragmented text message
+      return { bytesConsumed: frameEnd, fragment: true, payload };
     }
-    if (!fin) {
-      console.warn('[PeerServer] Ignoring fragmented text WebSocket frame');
+
+    if (opcode === 0x00) {
+      // Continuation frame
+      if (fin) {
+        return { bytesConsumed: frameEnd, fragmentEnd: true, payload };
+      }
+      return { bytesConsumed: frameEnd, fragment: true, payload };
+    }
+
+    if (opcode !== 0x01) {
       return { bytesConsumed: frameEnd, skip: true };
     }
 
@@ -830,9 +872,12 @@ class PeerServer extends EventEmitter {
 
   _wsSend(socket, data) {
     try {
+      if (!socket || socket.destroyed || !socket.writable) return false;
       socket.write(this._encodeFrame(data));
+      return true;
     } catch (e) {
       console.error('[PeerServer] Send error:', e.message);
+      return false;
     }
   }
 
@@ -840,12 +885,11 @@ class PeerServer extends EventEmitter {
     const peer = this.peers.get(peerId);
     if (!peer) return false;
     const ts = typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp) ? data.timestamp : Date.now();
-    this._wsSend(peer.socket, JSON.stringify({
+    return this._wsSend(peer.socket, JSON.stringify({
       type: 'message',
       ...data,
       timestamp: ts,
     }));
-    return true;
   }
 
   broadcast(data) {

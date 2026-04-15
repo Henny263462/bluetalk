@@ -502,6 +502,7 @@ export default function ChatsPage() {
     setContactNickname,
     setChatPinned,
     deleteChat,
+    deleteMessage,
   } = useApp();
 
   const location = useLocation();
@@ -774,6 +775,16 @@ export default function ChatsPage() {
   const saveFileMessage = (message) => {
     if (!message?.fileData) return;
     saveAttachmentToDisk(message.fileName || 'download', message.fileData);
+  };
+
+  const handleDeleteMessage = async (peerId, messageId) => {
+    if (!peerId || !messageId) return;
+    const ok = await deleteMessage(peerId, messageId);
+    if (ok) {
+      toast({ variant: 'success', title: 'Message deleted' });
+    } else {
+      toast({ variant: 'error', title: 'Could not delete message' });
+    }
   };
 
   const send = async () => {
@@ -1150,6 +1161,16 @@ export default function ChatsPage() {
                           <span className="msg-time">{formatMessageTime(m.timestamp)}</span>
                           {statusLine ? <span className="msg-delivery">{statusLine}</span> : null}
                         </div>
+                        {m.messageId && (
+                          <button
+                            type="button"
+                            className="msg-delete-btn"
+                            title="Delete message"
+                            onClick={() => handleDeleteMessage(selectedPeer.id, m.messageId)}
+                          >
+                            <Trash2 size={13} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );

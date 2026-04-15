@@ -295,6 +295,29 @@ body {
 .msg-delivery { font-size: 10px; color: var(--fg-3); opacity: 0.85; }
 .msg-self .msg-time { color: var(--accent-fg); opacity: 0.45; }
 .msg-self .msg-delivery { color: var(--accent-fg); opacity: 0.5; }
+.msg { position: relative; }
+.msg-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.msg:hover .msg-delete-btn { display: flex; }
+.msg-delete-btn:hover { opacity: 1; background: var(--red-soft, rgba(239,68,68,0.15)); color: var(--red, #ef4444); }
+.msg-self .msg-delete-btn { background: rgba(255,255,255,0.15); color: var(--accent-fg); }
+.msg-self .msg-delete-btn:hover { background: rgba(239,68,68,0.25); color: #fca5a5; }
 /* Bilder direkt im Verlauf, ohne Sprechblasen-Karte */
 .msg--bare-media {
   padding: 0;

@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
     getBatch: (peerId, options) => ipcRenderer.invoke('messages:getBatch', peerId, options),
     append: (peerId, message) => ipcRenderer.invoke('messages:append', peerId, message),
     patch: (peerId, messageId, patch) => ipcRenderer.invoke('messages:patch', peerId, messageId, patch),
+    deleteMessage: (peerId, messageId) => ipcRenderer.invoke('messages:deleteMessage', peerId, messageId),
     deleteChat: (peerId) => ipcRenderer.invoke('messages:deleteChat', peerId),
   },
 

@@ -511,6 +511,34 @@ export default function App() {
     });
   }, []);
 
+  const deleteMessage = useCallback(async (peerId, messageId) => {
+    if (!window.bluetalk || !peerId || !messageId) return false;
+    const deleted = await window.bluetalk.messages.deleteMessage(peerId, messageId);
+    if (!deleted) return false;
+
+    setMessages((prev) => {
+      const list = prev[peerId] || [];
+      const updated = list.filter((m) => m.messageId !== messageId);
+      return { ...prev, [peerId]: updated };
+    });
+
+    setChatMeta((prev) => {
+      const meta = prev[peerId];
+      if (!meta) return prev;
+      const newCount = Math.max(0, (meta.count || 1) - 1);
+      return {
+        ...prev,
+        [peerId]: {
+          ...meta,
+          count: newCount,
+          lastMessage: meta.lastMessage?.messageId === messageId ? null : meta.lastMessage,
+        },
+      };
+    });
+
+    return true;
+  }, []);
+
   const deleteChat = useCallback(async (peerId) => {
     if (!window.bluetalk || !peerId) return false;
 
@@ -577,6 +605,7 @@ export default function App() {
     refreshDiscovery,
     setContactNickname,
     setChatPinned,
+    deleteMessage,
     deleteChat,
     removeContact,
     updateSettings,
