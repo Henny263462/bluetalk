@@ -4,7 +4,6 @@ import { MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 
 import ChatsPage from './pages/Chats';
 import SettingsPage from './pages/Settings';
-import appIconUrl from '../../assets/icon.svg';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -17,7 +16,6 @@ function TitleBar() {
     <div className="titlebar">
       <div className="titlebar-drag">
         <div className="titlebar-brand">
-          <img src={appIconUrl} alt="" className="brand-logo" width={18} height={18} />
           <span>BlueTalk</span>
         </div>
       </div>

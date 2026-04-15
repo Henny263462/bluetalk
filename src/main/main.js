@@ -18,6 +18,11 @@ let updaterReady = false;
 const isDev = !app.isPackaged;
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
+app.setName('BlueTalk');
+if (process.platform === 'win32') {
+  app.setAppUserModelId(app.isPackaged ? 'com.bluetalk.app' : 'BlueTalk');
+}
+
 const NETWORK_TEST_HOST = 'portquiz.net';
 const NETWORK_TEST_PORTS = [443, 8443, 8080, 3000, 5000, 9090, 8888, 4443, 80];
 const PORT_TEST_TIMEOUT_MS = 1800;
