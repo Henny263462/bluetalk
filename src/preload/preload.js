@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('bluetalk', {
     delete: (key) => ipcRenderer.invoke('store:delete', key),
   },
 
+  messages: {
+    getMeta: () => ipcRenderer.invoke('messages:getMeta'),
+    getBatch: (peerId, options) => ipcRenderer.invoke('messages:getBatch', peerId, options),
+    append: (peerId, message) => ipcRenderer.invoke('messages:append', peerId, message),
+    deleteChat: (peerId) => ipcRenderer.invoke('messages:deleteChat', peerId),
+  },
+
   // Peer networking
   peer: {
     getInfo: () => ipcRenderer.invoke('peer:getInfo'),

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useRef, startTransition, createContext, useContext } from 'react';
 import { HashRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { MessageCircle, Settings as SettingsIcon } from 'lucide-react';
 
@@ -7,6 +7,7 @@ import SettingsPage from './pages/Settings';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
+const CHAT_MESSAGE_BATCH_SIZE = 24;
 
 function TitleBar() {
   const { peerCount, theme, toggleTheme } = useApp();
@@ -71,6 +72,8 @@ function Sidebar() {
 export default function App() {
   const [peers, setPeers] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [chatMeta, setChatMeta] = useState({});
+  const [loadedChats, setLoadedChats] = useState({});
   const [messages, setMessages] = useState({});
   const [theme, setTheme] = useState('dark');
   const [settings, setSettings] = useState({
@@ -83,6 +86,7 @@ export default function App() {
     minimizeToTray: true,
     theme: 'dark',
   });
+  const messageCacheRef = useRef({});
 
   const upsertContact = useCallback((patch) => {
     if (!patch?.id) return;
@@ -106,26 +110,52 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
+    messageCacheRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
     const load = async () => {
       if (!window.bluetalk) return;
 
-      const stored = await window.bluetalk.store.get('contacts', []);
-      setContacts(stored || []);
+      const [storedContacts, storedChatMeta, storedSettings, currentPeers] = await Promise.all([
+        window.bluetalk.store.get('contacts', []),
+        window.bluetalk.messages.getMeta(),
+        window.bluetalk.store.get('settings', {}),
+        window.bluetalk.peer.getPeers(),
+      ]);
 
-      const storedMsgs = await window.bluetalk.store.get('messages', {});
-      setMessages(storedMsgs || {});
+      setContacts(storedContacts || []);
+      setChatMeta(storedChatMeta || {});
 
-      const storedSettings = await window.bluetalk.store.get('settings', {});
       if (storedSettings) {
         setSettings((s) => ({ ...s, ...storedSettings }));
         if (storedSettings.theme) setTheme(storedSettings.theme);
       }
-
-      const currentPeers = await window.bluetalk.peer.getPeers();
       setPeers(currentPeers || []);
     };
 
     load();
+  }, []);
+
+  const loadChatMessages = useCallback(async (peerId, options = {}) => {
+    if (!window.bluetalk || !peerId) {
+      return { messages: [], total: 0, hasMore: false };
+    }
+
+    const reset = Boolean(options.reset);
+    const currentMessages = reset ? [] : (messageCacheRef.current[peerId] || []);
+    const batch = await window.bluetalk.messages.getBatch(peerId, {
+      skip: reset ? 0 : currentMessages.length,
+      limit: options.limit || CHAT_MESSAGE_BATCH_SIZE,
+    });
+
+    setMessages((prev) => ({
+      ...prev,
+      [peerId]: reset ? (batch.messages || []) : [...(batch.messages || []), ...(prev[peerId] || [])],
+    }));
+    setLoadedChats((prev) => ({ ...prev, [peerId]: true }));
+
+    return batch;
   }, []);
 
   useEffect(() => {
@@ -154,12 +184,22 @@ export default function App() {
     );
 
     unsubs.push(
-      window.bluetalk.on('peer:message', (msg) => {
-        setMessages((prev) => {
-          const key = msg.from;
-          const updated = { ...prev, [key]: [...(prev[key] || []), msg] };
-          window.bluetalk.store.set('messages', updated);
-          return updated;
+      window.bluetalk.on('peer:message', async (msg) => {
+        const meta = await window.bluetalk.messages.append(msg.from, msg);
+
+        setChatMeta((prev) => ({
+          ...prev,
+          [msg.from]: meta?.count ? meta : {
+            count: (prev[msg.from]?.count || 0) + 1,
+            lastMessage: msg,
+          },
+        }));
+
+        startTransition(() => {
+          setMessages((prev) => ({
+            ...prev,
+            [msg.from]: [...(prev[msg.from] || []), msg],
+          }));
         });
 
         if (msg.from) {
@@ -194,16 +234,30 @@ export default function App() {
       sender: settings.displayName,
     };
 
+    const selfMessage = {
+      ...msg,
+      from: 'self',
+      timestamp: Date.now(),
+    };
+
     try {
       const sent = await window.bluetalk.peer.send(peerId, msg);
       if (!sent) return false;
 
-      setMessages((prev) => {
-        const self = { ...msg, from: 'self', timestamp: Date.now() };
-        const updated = { ...prev, [peerId]: [...(prev[peerId] || []), self] };
-        window.bluetalk.store.set('messages', updated);
-        return updated;
-      });
+      const meta = await window.bluetalk.messages.append(peerId, selfMessage);
+
+      setMessages((prev) => ({
+        ...prev,
+        [peerId]: [...(prev[peerId] || []), selfMessage],
+      }));
+
+      setChatMeta((prev) => ({
+        ...prev,
+        [peerId]: meta?.count ? meta : {
+          count: (prev[peerId]?.count || 0) + 1,
+          lastMessage: selfMessage,
+        },
+      }));
 
       return true;
     } catch {
@@ -231,6 +285,11 @@ export default function App() {
     upsertContact({ id: contactId, nickname: (nickname || '').trim() });
   }, [upsertContact]);
 
+  const setChatPinned = useCallback((contactId, pinned) => {
+    if (!contactId) return;
+    upsertContact({ id: contactId, pinned: Boolean(pinned) });
+  }, [upsertContact]);
+
   const removeContact = useCallback((contactId) => {
     setContacts((prev) => {
       const updated = prev.filter((c) => c.id !== contactId);
@@ -238,6 +297,29 @@ export default function App() {
       return updated;
     });
   }, []);
+
+  const deleteChat = useCallback(async (peerId) => {
+    if (!window.bluetalk || !peerId) return false;
+
+    await window.bluetalk.messages.deleteChat(peerId);
+    setMessages((prev) => {
+      const updated = { ...prev };
+      delete updated[peerId];
+      return updated;
+    });
+    setChatMeta((prev) => {
+      const updated = { ...prev };
+      delete updated[peerId];
+      return updated;
+    });
+    setLoadedChats((prev) => {
+      const updated = { ...prev };
+      delete updated[peerId];
+      return updated;
+    });
+    removeContact(peerId);
+    return true;
+  }, [removeContact]);
 
   const updateSettings = useCallback((newSettings) => {
     setSettings((prev) => {
@@ -250,13 +332,18 @@ export default function App() {
   const ctx = {
     peers,
     contacts,
+    chatMeta,
+    loadedChats,
     messages,
     settings,
     theme,
     peerCount: peers.length,
     sendMessage,
+    loadChatMessages,
     connectToAddress,
     setContactNickname,
+    setChatPinned,
+    deleteChat,
     removeContact,
     updateSettings,
     toggleTheme,

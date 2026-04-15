@@ -7,6 +7,8 @@ class Store {
     const userDataPath = app.getPath('userData');
     this.path = path.join(userDataPath, opts.configName + '.json');
     this.data = this._load();
+    this._dirty = false;
+    this._writePromise = null;
   }
 
   _load() {
@@ -17,11 +19,28 @@ class Store {
     }
   }
 
-  _save() {
-    try {
-      fs.writeFileSync(this.path, JSON.stringify(this.data, null, 2));
-    } catch (e) {
-      console.error('Store save error:', e);
+  _scheduleSave() {
+    this._dirty = true;
+    if (this._writePromise) return;
+
+    this._writePromise = this._flushLoop().finally(() => {
+      this._writePromise = null;
+      if (this._dirty) {
+        this._scheduleSave();
+      }
+    });
+  }
+
+  async _flushLoop() {
+    while (this._dirty) {
+      this._dirty = false;
+
+      try {
+        await fs.promises.mkdir(path.dirname(this.path), { recursive: true });
+        await fs.promises.writeFile(this.path, JSON.stringify(this.data, null, 2), 'utf-8');
+      } catch (e) {
+        console.error('Store save error:', e);
+      }
     }
   }
 
@@ -45,7 +64,7 @@ class Store {
       obj = obj[keys[i]];
     }
     obj[keys[keys.length - 1]] = value;
-    this._save();
+    this._scheduleSave();
   }
 
   delete(key) {
@@ -56,7 +75,7 @@ class Store {
       obj = obj[keys[i]];
     }
     delete obj[keys[keys.length - 1]];
-    this._save();
+    this._scheduleSave();
   }
 
   getAll() {

@@ -31,11 +31,12 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       crawlLinks: true,
-      routes: ['/', '/download'],
+      routes: ['/'],
     },
   },
   routeRules: {
     '/': { prerender: true },
-    '/download': { prerender: true },
+    // Needs live /api/releases/* — avoid baking empty release data at generate time
+    '/download': { prerender: false },
   },
 })

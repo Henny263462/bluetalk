@@ -1,4 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Paperclip,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  SendHorizontal,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useApp } from '../App';
 
 function formatTime(ts) {
@@ -15,6 +25,7 @@ function formatSize(bytes) {
 
 const MAX_CHAT_FILE_SIZE_GB = 5;
 const MAX_CHAT_FILE_SIZE_BYTES = MAX_CHAT_FILE_SIZE_GB * 1024 * 1024 * 1024;
+const CHAT_BATCH_SIZE = 24;
 
 function getLastPreview(message) {
   if (!message) return 'No messages';
@@ -36,22 +47,43 @@ function readFileAsData(file) {
   });
 }
 
+function getImageUrl(message) {
+  if (!message) return '';
+
+  if (message.kind === 'file') {
+    const type = message.fileType || 'application/octet-stream';
+    if (!type.startsWith('image/') || !message.fileData) return '';
+    return `data:${type};base64,${message.fileData}`;
+  }
+
+  const content = String(message.content || '').trim();
+  if (!content) return '';
+  if (content.startsWith('data:image/')) return content;
+  if (/^https?:\/\/\S+\.(png|jpe?g|gif|webp|bmp|svg)(\?\S*)?$/i.test(content)) return content;
+  return '';
+}
+
 function FileMessage({ message }) {
-  const type = message.fileType || 'application/octet-stream';
-  const isImage = type.startsWith('image/');
-  const dataUrl = message.fileData ? `data:${type};base64,${message.fileData}` : '';
+  const dataUrl = getImageUrl(message);
 
   return (
     <div className="msg-file">
-      {isImage && dataUrl && (
-        <img src={dataUrl} alt={message.fileName || 'Image attachment'} className="msg-file-image" />
+      {dataUrl && (
+        <a href={dataUrl} target="_blank" rel="noreferrer" className="msg-file-image-link">
+          <img src={dataUrl} alt={message.fileName || 'Image attachment'} className="msg-file-image" />
+        </a>
       )}
       <div className="msg-file-info">
         <div className="msg-file-name">{message.fileName || 'Attachment'}</div>
         <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
       </div>
-      {dataUrl && (
-        <a href={dataUrl} download={message.fileName || 'file'} className="msg-file-download" title="Download file">
+      {message.fileData && (
+        <a
+          href={`data:${message.fileType || 'application/octet-stream'};base64,${message.fileData}`}
+          download={message.fileName || 'file'}
+          className="msg-file-download"
+          title="Download file"
+        >
           Download
         </a>
       )}
@@ -59,20 +91,38 @@ function FileMessage({ message }) {
   );
 }
 
+function ChatMessage({ message }) {
+  const imageUrl = getImageUrl(message);
+  if (!imageUrl) return <div>{message.content}</div>;
+
+  return (
+    <a href={imageUrl} target="_blank" rel="noreferrer" className="msg-inline-image-link">
+      <img src={imageUrl} alt="Shared image" className="msg-inline-image" />
+    </a>
+  );
+}
+
 export default function ChatsPage() {
   const {
     peers,
     contacts,
+    chatMeta,
+    loadedChats,
     messages,
     sendMessage,
+    loadChatMessages,
     connectToAddress,
     setContactNickname,
+    setChatPinned,
+    deleteChat,
   } = useApp();
 
   const [selectedPeerId, setSelectedPeerId] = useState(null);
   const [input, setInput] = useState('');
   const [search, setSearch] = useState('');
   const [warning, setWarning] = useState('');
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [showConnect, setShowConnect] = useState(false);
   const [connectAddress, setConnectAddress] = useState('');
@@ -91,7 +141,7 @@ export default function ChatsPage() {
     const ids = new Set([
       ...contacts.map((c) => c.id),
       ...peers.map((p) => p.id),
-      ...Object.keys(messages),
+      ...Object.keys(chatMeta || {}),
     ]);
     ids.delete('self');
 
@@ -99,9 +149,9 @@ export default function ChatsPage() {
     for (const id of ids) {
       const peer = peers.find((p) => p.id === id);
       const contact = contacts.find((c) => c.id === id);
-      const peerMsgs = messages[id] || [];
-      const lastMessage = peerMsgs[peerMsgs.length - 1];
+      const meta = chatMeta[id] || null;
       const baseName = contact?.name || peer?.name || id;
+
       list.push({
         id,
         peer,
@@ -109,12 +159,19 @@ export default function ChatsPage() {
         displayName: contact?.nickname || baseName,
         baseName,
         offline: !peer,
-        lastMessage,
+        pinned: Boolean(contact?.pinned),
+        lastMessage: meta?.lastMessage || null,
+        messageCount: meta?.count || 0,
       });
     }
 
-    return list.sort((a, b) => (b.lastMessage?.timestamp || 0) - (a.lastMessage?.timestamp || 0));
-  }, [contacts, peers, messages]);
+    return list.sort((a, b) => {
+      if (a.pinned !== b.pinned) return Number(b.pinned) - Number(a.pinned);
+      const aTs = a.lastMessage?.timestamp || a.contact?.addedAt || 0;
+      const bTs = b.lastMessage?.timestamp || b.contact?.addedAt || 0;
+      return bTs - aTs;
+    });
+  }, [chatMeta, contacts, peers]);
 
   const filtered = useMemo(
     () => chatList.filter((chat) =>
@@ -129,6 +186,8 @@ export default function ChatsPage() {
   );
 
   const msgs = selectedPeer ? messages[selectedPeer.id] || [] : [];
+  const hasMoreMessages = selectedPeer ? selectedPeer.messageCount > msgs.length : false;
+  const newestTimestamp = msgs[msgs.length - 1]?.timestamp || 0;
 
   useEffect(() => {
     if (selectedPeerId && !chatList.find((chat) => chat.id === selectedPeerId)) {
@@ -137,8 +196,30 @@ export default function ChatsPage() {
   }, [chatList, selectedPeerId]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function ensureMessages() {
+      if (!selectedPeerId) return;
+      if (loadedChats[selectedPeerId]) return;
+      if (!(chatMeta[selectedPeerId]?.count > 0)) return;
+
+      setLoadingMessages(true);
+      try {
+        await loadChatMessages(selectedPeerId, { reset: true, limit: CHAT_BATCH_SIZE });
+      } finally {
+        if (!cancelled) setLoadingMessages(false);
+      }
+    }
+
+    ensureMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [chatMeta, loadChatMessages, loadedChats, selectedPeerId]);
+
+  useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [msgs]);
+  }, [newestTimestamp, selectedPeerId]);
 
   const send = async () => {
     if (!selectedPeer) return;
@@ -169,6 +250,16 @@ export default function ChatsPage() {
         return;
       }
       setPendingFile(null);
+    }
+  };
+
+  const loadOlderMessages = async () => {
+    if (!selectedPeer) return;
+    setLoadingMore(true);
+    try {
+      await loadChatMessages(selectedPeer.id, { limit: CHAT_BATCH_SIZE });
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -228,6 +319,22 @@ export default function ChatsPage() {
     setShowNickname(false);
   };
 
+  const togglePinnedState = () => {
+    if (!selectedPeer) return;
+    setChatPinned(selectedPeer.id, !selectedPeer.pinned);
+  };
+
+  const handleDeleteChat = async () => {
+    if (!selectedPeer) return;
+    const confirmed = window.confirm(`Delete chat with ${selectedPeer.displayName}?`);
+    if (!confirmed) return;
+
+    await deleteChat(selectedPeer.id);
+    setSelectedPeerId(null);
+    setWarning('');
+    setPendingFile(null);
+  };
+
   return (
     <div className="page">
       <div className="split-layout">
@@ -235,11 +342,12 @@ export default function ChatsPage() {
           <div className="split-list-header">
             <h2>Chats</h2>
             <button className="btn btn-ghost btn-sm" onClick={() => setShowConnect(true)} title="Connect to peer">
-              +
+              <Plus size={16} />
             </button>
           </div>
           <div style={{ padding: '8px 12px' }}>
             <div className="search-bar">
+              <Search size={14} />
               <input
                 className="input"
                 placeholder="Search..."
@@ -264,10 +372,17 @@ export default function ChatsPage() {
                   {(chat.displayName || '?')[0].toUpperCase()}
                 </div>
                 <div className="list-item-info">
-                  <div className="list-item-name">{chat.displayName}</div>
+                  <div className="list-item-name-row">
+                    <div className="list-item-name">{chat.displayName}</div>
+                    {chat.pinned && (
+                      <span className="chat-pin-badge" title="Pinned chat">
+                        <Pin size={12} />
+                      </span>
+                    )}
+                  </div>
                   <div className="list-item-sub">{getLastPreview(chat.lastMessage)}</div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                <div className="chat-list-meta">
                   {chat.lastMessage && <span className="list-item-meta">{formatTime(chat.lastMessage.timestamp)}</span>}
                   <span className={chat.offline ? 'offline-dot' : 'online-dot'} />
                 </div>
@@ -288,17 +403,7 @@ export default function ChatsPage() {
             </div>
           ) : (
             <>
-              <div
-                style={{
-                  padding: '12px 20px',
-                  borderBottom: '1px solid var(--border)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  flexShrink: 0,
-                }}
-              >
+              <div className="chat-header">
                 <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
                   <div className="list-item-avatar">
                     {(selectedPeer.displayName || '?')[0].toUpperCase()}
@@ -308,26 +413,57 @@ export default function ChatsPage() {
                     <div className="text-sm text-muted">
                       {selectedPeer.offline ? 'Offline' : 'Online'}
                       {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
-                        ? ` · ${selectedPeer.baseName}`
+                        ? ` - ${selectedPeer.baseName}`
                         : ''}
                     </div>
                   </div>
                 </div>
-                <button className="btn btn-secondary btn-sm" onClick={openNicknameDialog}>
-                  Nickname
-                </button>
+                <div className="chat-header-actions">
+                  <button className="btn btn-secondary btn-sm" onClick={openNicknameDialog}>
+                    Nickname
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-icon"
+                    onClick={togglePinnedState}
+                    title={selectedPeer.pinned ? 'Unpin chat' : 'Pin chat'}
+                  >
+                    {selectedPeer.pinned ? <PinOff size={16} /> : <Pin size={16} />}
+                  </button>
+                  <button
+                    className="btn btn-danger btn-icon"
+                    onClick={handleDeleteChat}
+                    title="Delete chat"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
 
               <div className="chat-messages">
-                {msgs.length === 0 && (
+                {hasMoreMessages && (
+                  <div className="chat-load-more">
+                    <button className="btn btn-secondary btn-sm" onClick={loadOlderMessages} disabled={loadingMore}>
+                      {loadingMore ? 'Loading...' : `Load ${Math.min(CHAT_BATCH_SIZE, selectedPeer.messageCount - msgs.length)} older messages`}
+                    </button>
+                  </div>
+                )}
+
+                {loadingMessages && msgs.length === 0 && (
+                  <div className="chat-empty">
+                    <p className="text-muted">Loading messages...</p>
+                  </div>
+                )}
+
+                {!loadingMessages && msgs.length === 0 && (
                   <div className="chat-empty">
                     <p className="text-muted">No messages yet. Say hello!</p>
                   </div>
                 )}
+
                 {msgs.map((m, i) => (
-                  <div key={i} className={`msg ${m.from === 'self' ? 'msg-self' : 'msg-other'} animate-in`}>
+                  <div key={`${m.timestamp || i}-${m.from || 'msg'}-${i}`} className={`msg ${m.from === 'self' ? 'msg-self' : 'msg-other'} animate-in`}>
                     {m.from !== 'self' && <div className="msg-sender">{m.sender || m.from}</div>}
-                    {m.kind === 'file' ? <FileMessage message={m} /> : <div>{m.content}</div>}
+                    {m.kind === 'file' ? <FileMessage message={m} /> : <ChatMessage message={m} />}
                     <div className="msg-time">{formatTime(m.timestamp)}</div>
                   </div>
                 ))}
@@ -343,8 +479,8 @@ export default function ChatsPage() {
                   {pendingFile.type.startsWith('image/') && (
                     <img src={pendingFile.dataUrl} alt={pendingFile.name} className="pending-file-preview" />
                   )}
-                  <button className="btn btn-ghost btn-icon" onClick={() => setPendingFile(null)}>
-                    ×
+                  <button className="btn btn-ghost btn-icon" onClick={() => setPendingFile(null)} title="Remove attachment">
+                    <X size={16} />
                   </button>
                 </div>
               )}
@@ -362,11 +498,11 @@ export default function ChatsPage() {
                 <button
                   className="btn btn-secondary btn-icon"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={readingFile}
+                  disabled={readingFile || !selectedPeer}
                   title="Attach file"
                   style={{ height: 40, width: 40 }}
                 >
-                  +
+                  <Paperclip size={17} />
                 </button>
                 <textarea
                   value={input}
@@ -385,8 +521,9 @@ export default function ChatsPage() {
                   onClick={send}
                   disabled={!input.trim() && !pendingFile}
                   style={{ height: 40, width: 40 }}
+                  title="Send message"
                 >
-                  →
+                  <SendHorizontal size={17} />
                 </button>
               </div>
             </>
@@ -400,7 +537,7 @@ export default function ChatsPage() {
             <div className="flex items-center justify-between mb-2">
               <h3 style={{ margin: 0 }}>Connect to Peer</h3>
               <button className="btn btn-ghost btn-icon" onClick={() => setShowConnect(false)}>
-                ×
+                <X size={16} />
               </button>
             </div>
             <div className="input-group">
@@ -430,7 +567,7 @@ export default function ChatsPage() {
             <div className="flex items-center justify-between mb-2">
               <h3 style={{ margin: 0 }}>Set Nickname</h3>
               <button className="btn btn-ghost btn-icon" onClick={() => setShowNickname(false)}>
-                ×
+                <X size={16} />
               </button>
             </div>
             <div className="input-group">

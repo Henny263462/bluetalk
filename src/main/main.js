@@ -23,6 +23,7 @@ const NETWORK_TEST_PORTS = [443, 8443, 8080, 3000, 5000, 9090, 8888, 4443, 80];
 const PORT_TEST_TIMEOUT_MS = 1800;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+const CHAT_MESSAGE_BATCH_SIZE = 24;
 
 let updateState = {
   supported: false,
@@ -44,6 +45,63 @@ let updateState = {
 };
 
 let appIcon = null;
+
+function getStoredMessages() {
+  return store?.get('messages', {}) || {};
+}
+
+function getStoredChatMessages(peerId) {
+  const list = store?.get(`messages.${peerId}`, []);
+  return Array.isArray(list) ? list : [];
+}
+
+function setStoredChatMessages(peerId, list) {
+  if (!store || !peerId) return [];
+  store.set(`messages.${peerId}`, list);
+  return list;
+}
+
+function appendStoredChatMessage(peerId, message) {
+  const current = getStoredChatMessages(peerId);
+  const updated = [...current, message];
+  setStoredChatMessages(peerId, updated);
+  return updated;
+}
+
+function getChatMessageMeta() {
+  const storedMessages = getStoredMessages();
+  const meta = {};
+
+  for (const [peerId, rawMessages] of Object.entries(storedMessages)) {
+    if (peerId === 'self') continue;
+    const messages = Array.isArray(rawMessages) ? rawMessages : [];
+    if (messages.length === 0) continue;
+
+    meta[peerId] = {
+      count: messages.length,
+      lastMessage: messages[messages.length - 1] || null,
+    };
+  }
+
+  return meta;
+}
+
+function getChatMessageBatch(peerId, options = {}) {
+  const messages = getStoredChatMessages(peerId);
+  const skip = Math.max(0, Number(options.skip) || 0);
+  const limit = Math.max(1, Number(options.limit) || CHAT_MESSAGE_BATCH_SIZE);
+  const total = messages.length;
+  const end = Math.max(0, total - skip);
+  const start = Math.max(0, end - limit);
+
+  return {
+    messages: messages.slice(start, end),
+    total,
+    remaining: start,
+    hasMore: start > 0,
+    batchSize: end - start,
+  };
+}
 
 function createAppIcon(size) {
   if (!appIcon || appIcon.isEmpty()) {
@@ -487,6 +545,17 @@ function setupIPC() {
     if (key === 'settings' || key.startsWith('settings.')) {
       handleSettingsMutation();
     }
+    return true;
+  });
+
+  ipcMain.handle('messages:getMeta', () => getChatMessageMeta());
+  ipcMain.handle('messages:getBatch', (_, peerId, options = {}) => getChatMessageBatch(peerId, options));
+  ipcMain.handle('messages:append', (_, peerId, message) => {
+    appendStoredChatMessage(peerId, message);
+    return getChatMessageMeta()[peerId] || { count: 0, lastMessage: null };
+  });
+  ipcMain.handle('messages:deleteChat', (_, peerId) => {
+    store.delete(`messages.${peerId}`);
     return true;
   });
 

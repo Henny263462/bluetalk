@@ -6,8 +6,6 @@ useSeoMeta({
   ogDescription: 'Download the latest BlueTalk installer or portable build.',
 })
 
-const GITHUB_RELEASES = 'https://github.com/Henny263462/bluetalk/releases/latest'
-
 type ReleaseAsset = { url: string; name: string; size: number }
 
 type ReleasePayload = {
@@ -47,7 +45,7 @@ const cards = computed(() => {
       description:
         'Standard desktop installation with shortcuts, updates and a familiar Windows install flow.',
       meta: installerMeta,
-      href: d?.installer?.url ?? GITHUB_RELEASES,
+      href: downloadHref('installer'),
     },
     {
       key: 'portable',
@@ -55,15 +53,19 @@ const cards = computed(() => {
       title: 'Portable',
       description: 'Single executable for environments where installation should stay optional.',
       meta: portableMeta,
-      href: d?.portable?.url ?? GITHUB_RELEASES,
+      href: downloadHref('portable'),
     },
   ]
 })
 
 const showApiWarning = computed(() => Boolean(error.value || data.value?.error))
 const apiWarningText = computed(() => {
-  if (error.value) return 'Could not load release metadata. Links open the GitHub releases page.'
-  if (data.value?.error) return `${data.value.error} Links may open GitHub instead of starting a file download.`
+  if (error.value) {
+    return 'Could not load release details (sizes). Downloads still use the latest Windows build from GitHub.'
+  }
+  if (data.value?.error) {
+    return `${data.value.error} If a download returns 404, publish a Windows build on GitHub first.`
+  }
   return ''
 })
 </script>
