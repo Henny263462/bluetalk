@@ -26,12 +26,8 @@ const { data, pending, error } = await useFetch<ReleasePayload>('/api/releases/l
   key: 'bluetalk-latest-release',
 })
 
-const runtimeConfig = useRuntimeConfig()
-
-function downloadHref(kind: 'installer' | 'portable') {
-  const base = runtimeConfig.app.baseURL
-  return `${base}api/releases/download?kind=${kind}`
-}
+/** Same repo as `server/utils/releases.ts` — external URL so static prerender never crawls /api/releases/download (404 without assets). */
+const githubReleasesPage = 'https://github.com/Henny263462/bluetalk/releases'
 
 const baseMeta = ['Setup · Windows · .exe', 'No install · Windows · .exe'] as const
 
@@ -52,7 +48,7 @@ const cards = computed(() => {
       description:
         'Standard desktop installation with shortcuts, updates and a familiar Windows install flow.',
       meta: installerMeta,
-      href: downloadHref('installer'),
+      href: d?.installer?.url ?? githubReleasesPage,
     },
     {
       key: 'portable',
@@ -60,7 +56,7 @@ const cards = computed(() => {
       title: 'Portable',
       description: 'Single executable for environments where installation should stay optional.',
       meta: portableMeta,
-      href: downloadHref('portable'),
+      href: d?.portable?.url ?? githubReleasesPage,
     },
   ]
 })
@@ -68,10 +64,10 @@ const cards = computed(() => {
 const showApiWarning = computed(() => Boolean(error.value || data.value?.error))
 const apiWarningText = computed(() => {
   if (error.value) {
-    return 'Could not load release details (sizes). Downloads still use the latest Windows build from GitHub.'
+    return 'Could not load release details (sizes). The download buttons link to GitHub releases until asset metadata is available.'
   }
   if (data.value?.error) {
-    return `${data.value.error} If a download returns 404, publish a Windows build on GitHub first.`
+    return `${data.value.error} The buttons below open GitHub releases; publish a Windows .exe there for one-click downloads.`
   }
   return ''
 })
