@@ -26,6 +26,13 @@ const { data, pending, error } = await useFetch<ReleasePayload>('/api/releases/l
   key: 'bluetalk-latest-release',
 })
 
+const runtimeConfig = useRuntimeConfig()
+
+function downloadHref(kind: 'installer' | 'portable') {
+  const base = runtimeConfig.app.baseURL
+  return `${base}api/releases/download?kind=${kind}`
+}
+
 const baseMeta = ['Setup · Windows · .exe', 'No install · Windows · .exe'] as const
 
 const cards = computed(() => {
