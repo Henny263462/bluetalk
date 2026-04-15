@@ -1,9 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef, startTransition, createContext, useContext } from 'react';
-import { HashRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { MessageCircle, Settings as SettingsIcon } from 'lucide-react';
+import { HashRouter, Routes, Route, NavLink } from 'react-router-dom';
+import { MessageCircle, Settings as SettingsIcon, UserPlus, Minus, Maximize2, SquareStack, X } from 'lucide-react';
 
 import ChatsPage from './pages/Chats';
 import SettingsPage from './pages/Settings';
+import NewConnectionsPage from './pages/NewConnections';
+import CloudSyncPage from './pages/CloudSync';
+import NotFoundPage from './pages/NotFound';
+import RuntimeUnavailablePage from './pages/RuntimeUnavailable';
+import NotificationCenter from './components/NotificationCenter';
+import ProfileMenu from './components/ProfileMenu';
+import { ToastProvider } from './components/ToastProvider';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -11,6 +19,23 @@ const CHAT_MESSAGE_BATCH_SIZE = 24;
 
 function TitleBar() {
   const { peerCount } = useApp();
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    const api = window.bluetalk?.window;
+    if (!api?.getMaximized || !api?.onMaximizedChange) return undefined;
+    let cancelled = false;
+    api.getMaximized().then((m) => {
+      if (!cancelled) setIsMaximized(m);
+    });
+    const unsub = api.onMaximizedChange((m) => {
+      if (!cancelled) setIsMaximized(m);
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, []);
 
   return (
     <div className="titlebar">
@@ -24,14 +49,20 @@ function TitleBar() {
         <span>{peerCount} peer{peerCount !== 1 ? 's' : ''}</span>
       </div>
       <div className="titlebar-controls">
-        <button onClick={() => window.bluetalk?.window.minimize()} className="tb-btn" title="Minimize">
-          −
+        <button type="button" onClick={() => window.bluetalk?.window.minimize()} className="tb-btn" title="Minimize" aria-label="Minimize">
+          <Minus size={14} strokeWidth={2} aria-hidden />
         </button>
-        <button onClick={() => window.bluetalk?.window.maximize()} className="tb-btn" title="Maximize">
-          □
+        <button
+          type="button"
+          onClick={() => window.bluetalk?.window.maximize()}
+          className="tb-btn"
+          title={isMaximized ? 'Restore' : 'Maximize'}
+          aria-label={isMaximized ? 'Restore' : 'Maximize'}
+        >
+          {isMaximized ? <SquareStack size={14} strokeWidth={2} aria-hidden /> : <Maximize2 size={14} strokeWidth={2} aria-hidden />}
         </button>
-        <button onClick={() => window.bluetalk?.window.close()} className="tb-btn tb-close" title="Close">
-          ×
+        <button type="button" onClick={() => window.bluetalk?.window.close()} className="tb-btn tb-close" title="Close" aria-label="Close">
+          <X size={14} strokeWidth={2} aria-hidden />
         </button>
       </div>
     </div>
@@ -41,22 +72,33 @@ function TitleBar() {
 function Sidebar() {
   const links = [
     { to: '/', label: 'Chats', icon: MessageCircle },
+    { to: '/new', label: 'New', icon: UserPlus },
     { to: '/settings', label: 'Settings', icon: SettingsIcon },
   ];
 
   return (
     <nav className="sidebar">
-      {links.map(({ to, label, icon: Icon }) => (
-        <NavLink
-          key={to}
-          to={to}
-          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-          title={label}
-        >
-          <Icon size={15} strokeWidth={2} />
-          <span>{label}</span>
-        </NavLink>
-      ))}
+      <div className="sidebar-nav">
+        {links.map(({ to, label, icon: Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+            title={label}
+          >
+            <Icon size={15} strokeWidth={2} />
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </div>
+      <div className="sidebar-footer">
+        <div className="sidebar-notif">
+          <NotificationCenter />
+        </div>
+        <div className="sidebar-profile">
+          <ProfileMenu variant="sidebar" />
+        </div>
+      </div>
     </nav>
   );
 }
@@ -70,16 +112,20 @@ export default function App() {
   const [theme, setTheme] = useState('dark');
   const [settings, setSettings] = useState({
     displayName: 'Anonymous',
+    bio: '',
+    profilePicture: '',
     peerPort: 0,
     peerPorts: [],
     apiPort: 19876,
     autoUpdateEnabled: true,
     autoDownloadUpdates: true,
     minimizeToTray: true,
+    launchAtLogin: false,
     theme: 'dark',
     debugMode: false,
   });
   const messageCacheRef = useRef({});
+  const [loadError, setLoadError] = useState('');
 
   const upsertContact = useCallback((patch) => {
     if (!patch?.id) return;
@@ -110,21 +156,41 @@ export default function App() {
     const load = async () => {
       if (!window.bluetalk) return;
 
-      const [storedContacts, storedChatMeta, storedSettings, currentPeers] = await Promise.all([
-        window.bluetalk.store.get('contacts', []),
-        window.bluetalk.messages.getMeta(),
-        window.bluetalk.store.get('settings', {}),
-        window.bluetalk.peer.getPeers(),
-      ]);
+      try {
+        const [storedContacts, storedChatMeta, storedSettings, currentPeers] = await Promise.all([
+          window.bluetalk.store.get('contacts', []),
+          window.bluetalk.messages.getMeta(),
+          window.bluetalk.store.get('settings', {}),
+          window.bluetalk.peer.getPeers(),
+        ]);
 
-      setContacts(storedContacts || []);
-      setChatMeta(storedChatMeta || {});
+        const meta = storedChatMeta || {};
+        let migrated = false;
+        const normalized = (storedContacts || []).map((c) => {
+          if (!c?.id) return c;
+          const count = meta[c.id]?.count || 0;
+          if (count > 0 && c.hasOutgoing !== true && c.pendingMessageRequest !== true) {
+            migrated = true;
+            return { ...c, hasOutgoing: true };
+          }
+          return c;
+        });
+        if (migrated) {
+          window.bluetalk.store.set('contacts', normalized);
+        }
 
-      if (storedSettings) {
-        setSettings((s) => ({ ...s, ...storedSettings }));
-        if (storedSettings.theme) setTheme(storedSettings.theme);
+        setContacts(normalized);
+        setChatMeta(meta);
+
+        if (storedSettings) {
+          setSettings((s) => ({ ...s, ...storedSettings }));
+          if (storedSettings.theme) setTheme(storedSettings.theme);
+        }
+        setPeers(currentPeers || []);
+        setLoadError('');
+      } catch (e) {
+        setLoadError(e?.message || 'Could not load your local data.');
       }
-      setPeers(currentPeers || []);
     };
 
     load();
@@ -158,7 +224,10 @@ export default function App() {
     unsubs.push(
       window.bluetalk.on('peer:connected', (peer) => {
         setPeers((prev) => {
-          if (prev.find((p) => p.id === peer.id)) return prev;
+          const idx = prev.findIndex((p) => p.id === peer.id);
+          if (idx >= 0) {
+            return prev.map((p, i) => (i === idx ? { ...p, ...peer } : p));
+          }
           return [...prev, peer];
         });
 
@@ -166,6 +235,8 @@ export default function App() {
           id: peer.id,
           name: peer.name || peer.id,
           address: peer.address && peer.port ? `${peer.address}:${peer.port}` : undefined,
+          bio: peer.bio,
+          profilePicture: peer.profilePicture,
         });
       })
     );
@@ -178,6 +249,16 @@ export default function App() {
 
     unsubs.push(
       window.bluetalk.on('peer:message', async (msg) => {
+        if (msg.kind === 'profile' && msg.from) {
+          upsertContact({
+            id: msg.from,
+            name: msg.displayName || msg.sender || msg.from,
+            bio: msg.bio,
+            profilePicture: msg.profilePicture,
+          });
+          return;
+        }
+
         const meta = await window.bluetalk.messages.append(msg.from, msg);
 
         setChatMeta((prev) => ({
@@ -196,9 +277,21 @@ export default function App() {
         });
 
         if (msg.from) {
-          upsertContact({
-            id: msg.from,
-            name: msg.sender || msg.from,
+          setContacts((prev) => {
+            const idx = prev.findIndex((c) => c.id === msg.from);
+            const existing = idx >= 0 ? prev[idx] : null;
+            const hasOutgoing = existing?.hasOutgoing === true;
+            const requestCleared = existing?.pendingMessageRequest === false;
+            const merged = {
+              ...(existing || { id: msg.from, addedAt: Date.now() }),
+              name: msg.sender || existing?.name || msg.from,
+              pendingMessageRequest: hasOutgoing || requestCleared ? false : true,
+            };
+            const updated = idx >= 0
+              ? prev.map((c, i) => (i === idx ? merged : c))
+              : [...prev, merged];
+            if (window.bluetalk) window.bluetalk.store.set('contacts', updated);
+            return updated;
           });
         }
       })
@@ -252,11 +345,13 @@ export default function App() {
         },
       }));
 
+      upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
+
       return true;
     } catch {
       return false;
     }
-  }, [settings.displayName]);
+  }, [settings.displayName, upsertContact]);
 
   const connectToAddress = useCallback(async (address) => {
     if (!window.bluetalk || !address?.trim()) {
@@ -268,9 +363,17 @@ export default function App() {
       id: peerInfo.id,
       name: peerInfo.name || peerInfo.id,
       address: address.trim(),
+      hasOutgoing: true,
+      bio: peerInfo.bio,
+      profilePicture: peerInfo.profilePicture,
     });
 
     return peerInfo;
+  }, [upsertContact]);
+
+  const acceptMessageRequest = useCallback((peerId) => {
+    if (!peerId) return;
+    upsertContact({ id: peerId, pendingMessageRequest: false });
   }, [upsertContact]);
 
   const setContactNickname = useCallback((contactId, nickname) => {
@@ -317,7 +420,19 @@ export default function App() {
   const updateSettings = useCallback((newSettings) => {
     setSettings((prev) => {
       const merged = { ...prev, ...newSettings };
-      if (window.bluetalk) window.bluetalk.store.set('settings', merged);
+      if (window.bluetalk) {
+        window.bluetalk.store.set('settings', merged);
+        const profileKeys = ['displayName', 'bio', 'profilePicture'];
+        if (profileKeys.some((k) => Object.prototype.hasOwnProperty.call(newSettings, k))) {
+          window.bluetalk.peer.broadcast({
+            kind: 'profile',
+            displayName: merged.displayName,
+            bio: merged.bio || '',
+            profilePicture: merged.profilePicture || '',
+            sender: merged.displayName,
+          });
+        }
+      }
       return merged;
     });
   }, []);
@@ -340,25 +455,51 @@ export default function App() {
     removeContact,
     updateSettings,
     toggleTheme,
+    upsertContact,
+    acceptMessageRequest,
   };
+
+  if (!window.bluetalk) {
+    return (
+      <AppContext.Provider value={ctx}>
+        <ToastProvider>
+          <RuntimeUnavailablePage />
+        </ToastProvider>
+      </AppContext.Provider>
+    );
+  }
 
   return (
     <AppContext.Provider value={ctx}>
-      <HashRouter>
-        <div className="app">
-          <TitleBar />
-          <div className="app-body">
-            <Sidebar />
-            <main className="content">
-              <Routes>
-                <Route path="/" element={<ChatsPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </main>
-          </div>
-        </div>
-      </HashRouter>
+      <ToastProvider>
+        <ErrorBoundary>
+          <HashRouter>
+            <div className="app">
+              <TitleBar />
+              {loadError ? (
+                <div className="app-banner app-banner--error" role="alert">
+                  <span>{loadError}</span>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setLoadError('')}>
+                    Dismiss
+                  </button>
+                </div>
+              ) : null}
+              <div className="app-body">
+                <Sidebar />
+                <main className="content">
+                  <Routes>
+                    <Route path="/" element={<ChatsPage />} />
+                    <Route path="/new" element={<NewConnectionsPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/cloud-sync" element={<CloudSyncPage />} />
+                    <Route path="*" element={<NotFoundPage />} />
+                  </Routes>
+                </main>
+              </div>
+            </div>
+          </HashRouter>
+        </ErrorBoundary>
+      </ToastProvider>
     </AppContext.Provider>
   );
 }

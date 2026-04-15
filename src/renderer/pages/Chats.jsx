@@ -1,14 +1,29 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  Archive,
+  Download,
+  File,
+  FileCode,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  Film,
+  Music,
   Paperclip,
   Pin,
   PinOff,
+  FileBarChart,
   Search,
   SendHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
 import { useApp } from '../App';
+import { useToast } from '../components/ToastProvider';
+
+const CHAT_ICON_STROKE = 1.75;
 
 function formatTime(ts) {
   if (!ts) return '';
@@ -20,6 +35,26 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function PeerAvatar({ pictureUrl, name, size = 36, className = '' }) {
+  const initial = (name || '?')[0].toUpperCase();
+  const dim = { width: size, height: size, fontSize: Math.round(size * 0.38) };
+  if (pictureUrl) {
+    return (
+      <img
+        src={pictureUrl}
+        alt=""
+        className={`peer-avatar-img ${className}`}
+        style={dim}
+      />
+    );
+  }
+  return (
+    <div className={`list-item-avatar peer-avatar-fallback ${className}`} style={dim}>
+      {initial}
+    </div>
+  );
 }
 
 const MAX_CHAT_FILE_SIZE_GB = 5;
@@ -46,6 +81,12 @@ function readFileAsData(file) {
   });
 }
 
+function getFileBlobUrl(message) {
+  if (!message || message.kind !== 'file' || !message.fileData) return '';
+  const type = message.fileType || 'application/octet-stream';
+  return `data:${type};base64,${message.fileData}`;
+}
+
 function getImageUrl(message) {
   if (!message) return '';
 
@@ -62,28 +103,143 @@ function getImageUrl(message) {
   return '';
 }
 
+function extOf(name) {
+  const i = String(name || '').lastIndexOf('.');
+  if (i <= 0) return '';
+  return String(name).slice(i + 1).toLowerCase();
+}
+
+function getFileCategory(mime, fileName) {
+  const m = String(mime || '').toLowerCase();
+  const ext = extOf(fileName);
+
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+
+  if (!m || m === 'application/octet-stream') {
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext)) return 'image';
+    if (['mp4', 'webm', 'ogg', 'mov', 'mkv', 'avi', 'm4v'].includes(ext)) return 'video';
+    if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus'].includes(ext)) return 'audio';
+  }
+
+  return 'other';
+}
+
+function FileTypeIcon({ mime, fileName, size = 22 }) {
+  const m = String(mime || '').toLowerCase();
+  const ext = extOf(fileName);
+  const stroke = CHAT_ICON_STROKE;
+  const common = { size, strokeWidth: stroke, 'aria-hidden': true };
+
+  if (m.startsWith('image/') || ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) {
+    return <FileImage {...common} />;
+  }
+  if (m.startsWith('video/')) return <Film {...common} />;
+  if (m.startsWith('audio/')) return <Music {...common} />;
+  if (m === 'application/pdf' || ext === 'pdf') return <FileType {...common} />;
+  if (
+    m.includes('zip') ||
+    m.includes('rar') ||
+    m.includes('7z') ||
+    m.includes('tar') ||
+    m.includes('gzip') ||
+    ['zip', 'rar', '7z', 'tar', 'gz', 'tgz'].includes(ext)
+  ) {
+    return <Archive {...common} />;
+  }
+  if (m.includes('spreadsheet') || m.includes('excel') || ['xls', 'xlsx', 'csv', 'ods'].includes(ext)) {
+    return <FileSpreadsheet {...common} />;
+  }
+  if (m.includes('presentation') || ['ppt', 'pptx', 'odp'].includes(ext)) {
+    return <FileBarChart {...common} />;
+  }
+  if (m.startsWith('text/') || ['txt', 'md', 'rtf'].includes(ext)) {
+    return <FileText {...common} />;
+  }
+  if (
+    ['json', 'js', 'jsx', 'ts', 'tsx', 'html', 'css', 'xml', 'yaml', 'yml', 'toml', 'rs', 'go', 'py', 'java', 'c', 'cpp', 'h'].includes(
+      ext
+    )
+  ) {
+    return <FileCode {...common} />;
+  }
+  return <File {...common} />;
+}
+
 function FileMessage({ message }) {
-  const dataUrl = getImageUrl(message);
+  const dataUrl = getFileBlobUrl(message);
+  const mime = message.fileType || 'application/octet-stream';
+  const category = getFileCategory(mime, message.fileName);
+  const imageUrl = category === 'image' ? getImageUrl(message) : '';
+  const hasPayload = Boolean(message.fileData && dataUrl);
+  const showImagePreview = category === 'image' && !!imageUrl;
+  const showIconRow =
+    category === 'other' || (category === 'image' && !imageUrl) || ((category === 'video' || category === 'audio') && !hasPayload);
+  const showMediaFooter = (category === 'video' || category === 'audio') && hasPayload;
+  const showImageMeta = showImagePreview;
 
   return (
-    <div className="msg-file">
-      {dataUrl && (
-        <a href={dataUrl} target="_blank" rel="noreferrer" className="msg-file-image-link">
-          <img src={dataUrl} alt={message.fileName || 'Image attachment'} className="msg-file-image" />
+    <div className={`msg-file msg-file--${category}`}>
+      {showImagePreview && (
+        <a href={imageUrl} target="_blank" rel="noreferrer" className="msg-file-image-link">
+          <img src={imageUrl} alt={message.fileName || 'Bildanhang'} className="msg-file-image" loading="lazy" />
         </a>
       )}
-      <div className="msg-file-info">
-        <div className="msg-file-name">{message.fileName || 'Attachment'}</div>
-        <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
-      </div>
+
+      {category === 'video' && hasPayload && (
+        <video src={dataUrl} controls playsInline className="msg-file-video" preload="metadata" />
+      )}
+
+      {category === 'audio' && hasPayload && (
+        <audio src={dataUrl} controls className="msg-file-audio" preload="metadata" />
+      )}
+
+      {showIconRow && (
+        <div className="msg-file-row">
+          <div className="msg-file-icon-wrap">
+            <FileTypeIcon mime={mime} fileName={message.fileName} />
+          </div>
+          <div className="msg-file-meta-block">
+            <div className="msg-file-name" title={message.fileName || ''}>
+              {message.fileName || 'Anhang'}
+            </div>
+            <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
+          </div>
+        </div>
+      )}
+
+      {showImageMeta && (
+        <div className="msg-file-footer msg-file-footer--image">
+          <div className="msg-file-meta-block msg-file-meta-block--grow">
+            <div className="msg-file-name" title={message.fileName || ''}>
+              {message.fileName || 'Anhang'}
+            </div>
+            <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
+          </div>
+        </div>
+      )}
+
+      {showMediaFooter && (
+        <div className="msg-file-footer">
+          <div className="msg-file-meta-block msg-file-meta-block--grow">
+            <div className="msg-file-name" title={message.fileName || ''}>
+              {message.fileName || 'Anhang'}
+            </div>
+            <div className="msg-file-size">{formatSize(message.fileSize || 0)}</div>
+          </div>
+        </div>
+      )}
+
       {message.fileData && (
         <a
-          href={`data:${message.fileType || 'application/octet-stream'};base64,${message.fileData}`}
+          href={dataUrl}
           download={message.fileName || 'file'}
           className="msg-file-download"
-          title="Download file"
+          title="Datei herunterladen"
         >
-          Download
+          <Download size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+          <span>Download</span>
         </a>
       )}
     </div>
@@ -102,12 +258,14 @@ function ChatMessage({ message }) {
 }
 
 export default function ChatsPage() {
+  const { toast } = useToast();
   const {
     peers,
     contacts,
     chatMeta,
     loadedChats,
     messages,
+    settings,
     sendMessage,
     loadChatMessages,
     connectToAddress,
@@ -115,6 +273,9 @@ export default function ChatsPage() {
     setChatPinned,
     deleteChat,
   } = useApp();
+
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [selectedPeerId, setSelectedPeerId] = useState(null);
   const [input, setInput] = useState('');
@@ -129,6 +290,8 @@ export default function ChatsPage() {
 
   const [showNickname, setShowNickname] = useState(false);
   const [nicknameInput, setNicknameInput] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingChat, setDeletingChat] = useState(false);
 
   const [pendingFile, setPendingFile] = useState(null);
   const [readingFile, setReadingFile] = useState(false);
@@ -150,6 +313,8 @@ export default function ChatsPage() {
       const contact = contacts.find((c) => c.id === id);
       const meta = chatMeta[id] || null;
       const baseName = contact?.name || peer?.name || id;
+      const profilePicture = contact?.profilePicture || peer?.profilePicture || '';
+      const bio = contact?.bio ?? peer?.bio ?? '';
 
       list.push({
         id,
@@ -157,6 +322,8 @@ export default function ChatsPage() {
         contact,
         displayName: contact?.nickname || baseName,
         baseName,
+        profilePicture,
+        bio,
         offline: !peer,
         pinned: Boolean(contact?.pinned),
         lastMessage: meta?.lastMessage || null,
@@ -172,17 +339,41 @@ export default function ChatsPage() {
     });
   }, [chatMeta, contacts, peers]);
 
+  const mainChatList = useMemo(
+    () =>
+      chatList.filter((chat) => {
+        if (chat.contact?.pendingMessageRequest === true) return false;
+        if (chat.messageCount === 0 && !chat.contact?.hasOutgoing) return false;
+        return true;
+      }),
+    [chatList]
+  );
+
   const filtered = useMemo(
-    () => chatList.filter((chat) =>
+    () => mainChatList.filter((chat) =>
       `${chat.displayName} ${chat.baseName} ${chat.id}`.toLowerCase().includes(search.toLowerCase())
     ),
-    [chatList, search]
+    [mainChatList, search]
   );
 
   const selectedPeer = useMemo(
     () => chatList.find((c) => c.id === selectedPeerId) || null,
     [chatList, selectedPeerId]
   );
+
+  const openPeerFromNav = location.state?.openPeerId;
+  useEffect(() => {
+    if (!openPeerFromNav) return;
+    setSelectedPeerId(openPeerFromNav);
+    navigate('.', { replace: true, state: {} });
+  }, [openPeerFromNav, navigate]);
+
+  useEffect(() => {
+    if (openPeerFromNav) return;
+    if (selectedPeerId != null) return;
+    const first = mainChatList[0];
+    if (first) setSelectedPeerId(first.id);
+  }, [openPeerFromNav, selectedPeerId, mainChatList]);
 
   const msgs = selectedPeer ? messages[selectedPeer.id] || [] : [];
   const hasMoreMessages = selectedPeer ? selectedPeer.messageCount > msgs.length : false;
@@ -205,6 +396,14 @@ export default function ChatsPage() {
       setLoadingMessages(true);
       try {
         await loadChatMessages(selectedPeerId, { reset: true, limit: CHAT_BATCH_SIZE });
+      } catch (e) {
+        if (!cancelled) {
+          toast({
+            variant: 'error',
+            title: 'Could not load messages',
+            message: e?.message || 'Check storage permissions or try again.',
+          });
+        }
       } finally {
         if (!cancelled) setLoadingMessages(false);
       }
@@ -214,7 +413,7 @@ export default function ChatsPage() {
     return () => {
       cancelled = true;
     };
-  }, [chatMeta, loadChatMessages, loadedChats, selectedPeerId]);
+  }, [chatMeta, loadChatMessages, loadedChats, selectedPeerId, toast]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -229,7 +428,9 @@ export default function ChatsPage() {
     if (input.trim()) {
       const ok = await sendMessage(selectedPeer.id, { kind: 'chat', content: input.trim() });
       if (!ok) {
-        setWarning('Message could not be delivered. Peer is probably offline.');
+        const msg = 'Message could not be delivered. Peer is probably offline.';
+        setWarning(msg);
+        toast({ variant: 'error', title: 'Message not sent', message: msg });
         return;
       }
       setInput('');
@@ -245,7 +446,9 @@ export default function ChatsPage() {
         fileData: pendingFile.base64,
       });
       if (!ok) {
-        setWarning('File could not be delivered. Peer is probably offline.');
+        const msg = 'File could not be delivered. Peer is probably offline.';
+        setWarning(msg);
+        toast({ variant: 'error', title: 'File not sent', message: msg });
         return;
       }
       setPendingFile(null);
@@ -257,6 +460,12 @@ export default function ChatsPage() {
     setLoadingMore(true);
     try {
       await loadChatMessages(selectedPeer.id, { limit: CHAT_BATCH_SIZE });
+    } catch (e) {
+      toast({
+        variant: 'error',
+        title: 'Could not load older messages',
+        message: e?.message || 'Try again in a moment.',
+      });
     } finally {
       setLoadingMore(false);
     }
@@ -268,7 +477,9 @@ export default function ChatsPage() {
     if (!file) return;
 
     if (file.size > MAX_CHAT_FILE_SIZE_BYTES) {
-      setWarning(`Max file size in chat is ${MAX_CHAT_FILE_SIZE_GB} GB.`);
+      const msg = `Max file size in chat is ${MAX_CHAT_FILE_SIZE_GB} GB.`;
+      setWarning(msg);
+      toast({ variant: 'warning', title: 'File too large', message: msg });
       return;
     }
 
@@ -284,7 +495,9 @@ export default function ChatsPage() {
         dataUrl: data.dataUrl,
       });
     } catch {
-      setWarning('Could not read file.');
+      const msg = 'Could not read file.';
+      setWarning(msg);
+      toast({ variant: 'error', title: 'File error', message: msg });
     } finally {
       setReadingFile(false);
     }
@@ -300,7 +513,9 @@ export default function ChatsPage() {
       setShowConnect(false);
       setConnectAddress('');
     } catch (err) {
-      setWarning(err.message || 'Connection failed');
+      const msg = err.message || 'Connection failed';
+      setWarning(msg);
+      toast({ variant: 'error', title: 'Connection failed', message: msg });
     } finally {
       setConnecting(false);
     }
@@ -323,15 +538,18 @@ export default function ChatsPage() {
     setChatPinned(selectedPeer.id, !selectedPeer.pinned);
   };
 
-  const handleDeleteChat = async () => {
+  const confirmDeleteChat = async () => {
     if (!selectedPeer) return;
-    const confirmed = window.confirm(`Delete chat with ${selectedPeer.displayName}?`);
-    if (!confirmed) return;
-
-    await deleteChat(selectedPeer.id);
-    setSelectedPeerId(null);
-    setWarning('');
-    setPendingFile(null);
+    setDeletingChat(true);
+    try {
+      await deleteChat(selectedPeer.id);
+      setSelectedPeerId(null);
+      setWarning('');
+      setPendingFile(null);
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeletingChat(false);
+    }
   };
 
   return (
@@ -343,7 +561,7 @@ export default function ChatsPage() {
           </div>
           <div style={{ padding: '8px 12px' }}>
             <div className="search-bar">
-              <Search size={14} />
+              <Search size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
               <input
                 className="input"
                 placeholder="Search..."
@@ -355,7 +573,7 @@ export default function ChatsPage() {
           <div className="split-list-body">
             {filtered.length === 0 && (
               <div className="empty-state" style={{ padding: '24px 12px' }}>
-                <p>No chats yet. Connect to a peer to start.</p>
+                <p>No chats yet. Use New in the sidebar for peers without a conversation, or connect below.</p>
               </div>
             )}
             {filtered.map((chat) => (
@@ -364,15 +582,13 @@ export default function ChatsPage() {
                 className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}`}
                 onClick={() => setSelectedPeerId(chat.id)}
               >
-                <div className="list-item-avatar">
-                  {(chat.displayName || '?')[0].toUpperCase()}
-                </div>
+                <PeerAvatar pictureUrl={chat.profilePicture} name={chat.displayName} size={36} />
                 <div className="list-item-info">
                   <div className="list-item-name-row">
                     <div className="list-item-name">{chat.displayName}</div>
                     {chat.pinned && (
-                      <span className="chat-pin-badge" title="Pinned chat">
-                        <Pin size={12} />
+                      <span className="chat-pin-badge" title="Angehefteter Chat">
+                        <Pin size={12} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                       </span>
                     )}
                   </div>
@@ -393,7 +609,7 @@ export default function ChatsPage() {
               <div className="empty-state">
                 <p>Select a conversation to start messaging</p>
                 <button className="btn btn-secondary btn-sm" onClick={() => setShowConnect(true)}>
-                  Connect Peer
+                  Connect to peer
                 </button>
               </div>
             </div>
@@ -401,16 +617,21 @@ export default function ChatsPage() {
             <>
               <div className="chat-header">
                 <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
-                  <div className="list-item-avatar">
-                    {(selectedPeer.displayName || '?')[0].toUpperCase()}
-                  </div>
+                  <PeerAvatar pictureUrl={selectedPeer.profilePicture} name={selectedPeer.displayName} size={40} />
                   <div style={{ minWidth: 0 }}>
                     <div className="font-medium truncate" style={{ fontSize: 14 }}>{selectedPeer.displayName}</div>
-                    <div className="text-sm text-muted">
-                      {selectedPeer.offline ? 'Offline' : 'Online'}
-                      {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
-                        ? ` - ${selectedPeer.baseName}`
-                        : ''}
+                    <div className="text-sm text-muted chat-header-meta">
+                      <span>
+                        {selectedPeer.offline ? 'Offline' : 'Online'}
+                        {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
+                          ? ` · ${selectedPeer.baseName}`
+                          : ''}
+                      </span>
+                      {selectedPeer.bio ? (
+                        <span className="chat-header-bio" title={selectedPeer.bio}>
+                          {selectedPeer.bio}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -421,16 +642,20 @@ export default function ChatsPage() {
                   <button
                     className="btn btn-secondary btn-icon"
                     onClick={togglePinnedState}
-                    title={selectedPeer.pinned ? 'Unpin chat' : 'Pin chat'}
+                    title={selectedPeer.pinned ? 'Chat lösen' : 'Chat anheften'}
                   >
-                    {selectedPeer.pinned ? <PinOff size={16} /> : <Pin size={16} />}
+                    {selectedPeer.pinned ? (
+                      <PinOff size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                    ) : (
+                      <Pin size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                    )}
                   </button>
                   <button
                     className="btn btn-danger btn-icon"
-                    onClick={handleDeleteChat}
-                    title="Delete chat"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    title="Chat löschen"
                   >
-                    <Trash2 size={16} />
+                    <Trash2 size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                   </button>
                 </div>
               </div>
@@ -456,27 +681,49 @@ export default function ChatsPage() {
                   </div>
                 )}
 
-                {msgs.map((m, i) => (
-                  <div key={`${m.timestamp || i}-${m.from || 'msg'}-${i}`} className={`msg ${m.from === 'self' ? 'msg-self' : 'msg-other'} animate-in`}>
-                    {m.from !== 'self' && <div className="msg-sender">{m.sender || m.from}</div>}
-                    {m.kind === 'file' ? <FileMessage message={m} /> : <ChatMessage message={m} />}
-                    <div className="msg-time">{formatTime(m.timestamp)}</div>
-                  </div>
-                ))}
+                {msgs.map((m, i) => {
+                  const isSelf = m.from === 'self';
+                  const bubbleName = isSelf ? (settings.displayName || 'You') : (m.sender || selectedPeer.displayName);
+                  const bubblePic = isSelf ? settings.profilePicture : selectedPeer.profilePicture;
+                  return (
+                    <div
+                      key={`${m.timestamp || i}-${m.from || 'msg'}-${i}`}
+                      className={`msg-row ${isSelf ? 'msg-row-self' : 'msg-row-other'}`}
+                    >
+                      <PeerAvatar pictureUrl={bubblePic} name={bubbleName} size={28} className="msg-avatar" />
+                      <div className={`msg ${isSelf ? 'msg-self' : 'msg-other'} animate-in`}>
+                        {!isSelf && <div className="msg-sender">{m.sender || m.from}</div>}
+                        {m.kind === 'file' ? <FileMessage message={m} /> : <ChatMessage message={m} />}
+                        <div className="msg-time">{formatTime(m.timestamp)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
                 <div ref={endRef} />
               </div>
 
               {pendingFile && (
                 <div className="pending-file">
+                  <div className="pending-file-icon-wrap" aria-hidden>
+                    <FileTypeIcon mime={pendingFile.type} fileName={pendingFile.name} size={20} />
+                  </div>
                   <div className="pending-file-info">
                     <div className="pending-file-name">{pendingFile.name}</div>
                     <div className="pending-file-meta">{formatSize(pendingFile.size)}</div>
                   </div>
                   {pendingFile.type.startsWith('image/') && (
-                    <img src={pendingFile.dataUrl} alt={pendingFile.name} className="pending-file-preview" />
+                    <img src={pendingFile.dataUrl} alt="" className="pending-file-preview" />
                   )}
-                  <button className="btn btn-ghost btn-icon" onClick={() => setPendingFile(null)} title="Remove attachment">
-                    <X size={16} />
+                  {pendingFile.type.startsWith('video/') && (
+                    <video src={pendingFile.dataUrl} className="pending-file-preview pending-file-preview--video" muted playsInline preload="metadata" />
+                  )}
+                  <button
+                    className="btn btn-ghost btn-icon"
+                    onClick={() => setPendingFile(null)}
+                    title="Anhang entfernen"
+                    type="button"
+                  >
+                    <X size={16} strokeWidth={CHAT_ICON_STROKE} />
                   </button>
                 </div>
               )}
@@ -495,10 +742,10 @@ export default function ChatsPage() {
                   className="btn btn-secondary btn-icon"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={readingFile || !selectedPeer}
-                  title="Attach file"
+                  title="Datei anhängen"
                   style={{ height: 40, width: 40 }}
                 >
-                  <Paperclip size={17} />
+                  <Paperclip size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                 </button>
                 <textarea
                   value={input}
@@ -517,9 +764,9 @@ export default function ChatsPage() {
                   onClick={send}
                   disabled={!input.trim() && !pendingFile}
                   style={{ height: 40, width: 40 }}
-                  title="Send message"
+                  title="Nachricht senden"
                 >
-                  <SendHorizontal size={17} />
+                  <SendHorizontal size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                 </button>
               </div>
             </>
@@ -532,8 +779,8 @@ export default function ChatsPage() {
           <div className="modal animate-scale" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-2">
               <h3 style={{ margin: 0 }}>Connect to Peer</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setShowConnect(false)}>
-                <X size={16} />
+              <button type="button" className="btn btn-ghost btn-icon" onClick={() => setShowConnect(false)} aria-label="Schließen">
+                <X size={16} strokeWidth={CHAT_ICON_STROKE} />
               </button>
             </div>
             <div className="input-group">
@@ -562,8 +809,8 @@ export default function ChatsPage() {
           <div className="modal animate-scale" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-2">
               <h3 style={{ margin: 0 }}>Set Nickname</h3>
-              <button className="btn btn-ghost btn-icon" onClick={() => setShowNickname(false)}>
-                <X size={16} />
+              <button type="button" className="btn btn-ghost btn-icon" onClick={() => setShowNickname(false)} aria-label="Schließen">
+                <X size={16} strokeWidth={CHAT_ICON_STROKE} />
               </button>
             </div>
             <div className="input-group">
@@ -581,6 +828,46 @@ export default function ChatsPage() {
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowNickname(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={saveNickname}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteConfirm && selectedPeer && (
+        <div
+          className="modal-overlay"
+          onClick={() => !deletingChat && setShowDeleteConfirm(false)}
+        >
+          <div className="modal modal-danger animate-scale" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 style={{ margin: 0 }}>Delete chat?</h3>
+              <button
+                className="btn btn-ghost btn-icon"
+                onClick={() => !deletingChat && setShowDeleteConfirm(false)}
+                disabled={deletingChat}
+                aria-label="Schließen"
+              >
+                <X size={16} strokeWidth={CHAT_ICON_STROKE} />
+              </button>
+            </div>
+            <p className="text-muted" style={{ margin: '0 0 16px', lineHeight: 1.5 }}>
+              This removes the conversation with <strong>{selectedPeer.displayName}</strong> and all messages stored on this device. This cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deletingChat}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={confirmDeleteChat}
+                disabled={deletingChat}
+              >
+                {deletingChat ? 'Deleting…' : 'Delete chat'}
+              </button>
             </div>
           </div>
         </div>

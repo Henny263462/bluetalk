@@ -6,6 +6,12 @@ contextBridge.exposeInMainWorld('bluetalk', {
     minimize: () => ipcRenderer.invoke('window:minimize'),
     maximize: () => ipcRenderer.invoke('window:maximize'),
     close: () => ipcRenderer.invoke('window:close'),
+    getMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+    onMaximizedChange: (callback) => {
+      const listener = (_, maximized) => callback(maximized);
+      ipcRenderer.on('window:maximized', listener);
+      return () => ipcRenderer.removeListener('window:maximized', listener);
+    },
   },
 
   // Store

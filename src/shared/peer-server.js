@@ -64,6 +64,15 @@ class PeerServer extends EventEmitter {
     return this.store.get('settings.displayName', 'Anonymous');
   }
 
+  _getProfileFields() {
+    const bio = this.store.get('settings.bio', '') || '';
+    const profilePicture = this.store.get('settings.profilePicture', '') || '';
+    return {
+      bio: typeof bio === 'string' ? bio.slice(0, 500) : '',
+      profilePicture: typeof profilePicture === 'string' ? profilePicture.slice(0, 200000) : '',
+    };
+  }
+
   _normalizeAddress(address) {
     if (!address) return '';
     if (address.startsWith('::ffff:')) {
@@ -540,6 +549,7 @@ class PeerServer extends EventEmitter {
           port: this.port,
           ports: this.ports,
           addresses: this.getLocalAddresses(),
+          ...this._getProfileFields(),
         }));
 
         socket.on('data', (buffer) => {
@@ -565,6 +575,8 @@ class PeerServer extends EventEmitter {
                 port: data.port || candidate.port,
                 ports: this._normalizePortList(data.ports, data.port, candidate.port),
                 connectedAt: Date.now(),
+                bio: typeof data.bio === 'string' ? data.bio.slice(0, 500) : '',
+                profilePicture: typeof data.profilePicture === 'string' ? data.profilePicture.slice(0, 200000) : '',
               };
 
               this.peers.set(peerId, { socket, info });
@@ -645,6 +657,8 @@ class PeerServer extends EventEmitter {
             port: data.port,
             ports: this._normalizePortList(data.ports, data.port),
             connectedAt: Date.now(),
+            bio: typeof data.bio === 'string' ? data.bio.slice(0, 500) : '',
+            profilePicture: typeof data.profilePicture === 'string' ? data.profilePicture.slice(0, 200000) : '',
           };
 
           this.peers.set(peerId, { socket, info });
@@ -660,6 +674,7 @@ class PeerServer extends EventEmitter {
             port: this.port,
             ports: this.ports,
             addresses: this.getLocalAddresses(),
+            ...this._getProfileFields(),
           }));
           this.emit('peer:connected', info);
         } else if (data.type === 'message') {

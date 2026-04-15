@@ -206,6 +206,11 @@ function configureAutoUpdater() {
   const prefs = getUpdaterPreferences();
   autoUpdater.autoDownload = prefs.autoDownloadUpdates;
   autoUpdater.autoInstallOnAppQuit = true;
+  // Assisted NSIS (oneClick: false) needs /D for silent updates or the wizard asks for a path.
+  if (process.platform === 'win32' && app.isPackaged) {
+    autoUpdater.installDirectory = path.dirname(process.execPath);
+  }
+  autoUpdater.disableWebInstaller = true;
   patchUpdateState();
   return true;
 }
@@ -405,9 +410,24 @@ function setupAutoUpdater() {
   }
 }
 
+function applyLaunchAtLoginSetting() {
+  if (!store) return;
+  const wantsLaunch = Boolean(store.get('settings.launchAtLogin', false) ?? false);
+  const openAtLogin = app.isPackaged && wantsLaunch;
+  try {
+    app.setLoginItemSettings({
+      openAtLogin,
+      path: process.execPath,
+    });
+  } catch (err) {
+    console.error('Launch at login:', err);
+  }
+}
+
 function handleSettingsMutation() {
   configureAutoUpdater();
   scheduleAutoUpdateChecks();
+  applyLaunchAtLoginSetting();
 }
 
 function testSinglePort(host, port) {
@@ -479,6 +499,15 @@ function showMainWindow() {
   }
 }
 
+function broadcastWindowMaximized() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('window:maximized', mainWindow.isMaximized());
+  } catch {
+    /* webContents unavailable during teardown */
+  }
+}
+
 function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
     return mainWindow;
@@ -511,6 +540,7 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     broadcastUpdateState();
+    broadcastWindowMaximized();
   });
 
   mainWindow.once('ready-to-show', () => {
@@ -528,6 +558,9 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  mainWindow.on('maximize', broadcastWindowMaximized);
+  mainWindow.on('unmaximize', broadcastWindowMaximized);
 
   return mainWindow;
 }
@@ -558,6 +591,7 @@ function setupIPC() {
     if (mainWindow?.isMaximized()) mainWindow.unmaximize();
     else mainWindow?.maximize();
   });
+  ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
   ipcMain.handle('window:close', () => mainWindow?.close());
 
   ipcMain.handle('store:get', (_, key, defaultVal) => store.get(key, defaultVal));
@@ -620,7 +654,7 @@ function setupIPC() {
 
   for (const event of forwardEvents) {
     peerServer.on(event, (data) => {
-      if (event === 'peer:message' && data?.from !== 'self') {
+      if (event === 'peer:message' && data?.from !== 'self' && data?.kind !== 'profile') {
         const preview = data.kind === 'file'
           ? `File: ${data.fileName || data.content || 'Attachment'}`
           : (data.content || 'New message');
@@ -647,6 +681,7 @@ if (!gotSingleInstanceLock) {
     createTray();
     setupIPC();
     setupAutoUpdater();
+    applyLaunchAtLoginSetting();
 
     peerServer.start();
     apiServer.start(store.get('settings.apiPort', 19876));

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../App';
+import { useToast } from '../components/ToastProvider';
 import { APP_VERSION } from '../appVersion';
 import {
   ArrowUpCircle,
@@ -12,6 +13,7 @@ import {
   Globe,
   Moon,
   Network,
+  Power,
   RefreshCw,
   RotateCw,
   Server,
@@ -70,6 +72,7 @@ function getUpdateBadgeClass(state) {
 }
 
 export default function SettingsPage() {
+  const { toast } = useToast();
   const { settings, updateSettings, peers, theme, toggleTheme } = useApp();
   const [peerInfo, setPeerInfo] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -127,18 +130,34 @@ export default function SettingsPage() {
     updateSettings({ [key]: value });
   };
 
-  const copyAddress = () => {
+  const copyAddress = async () => {
     const endpoint = peerInfo?.endpoints?.[0] || (
       peerInfo?.addresses?.[0] && peerInfo?.port
         ? `${peerInfo.addresses[0]}:${peerInfo.port}`
         : ''
     );
 
-    if (!endpoint) return;
+    if (!endpoint) {
+      toast({
+        variant: 'warning',
+        title: 'Nothing to copy',
+        message: 'Your address is not ready yet. Wait a few seconds and try again.',
+      });
+      return;
+    }
 
-    navigator.clipboard?.writeText(endpoint);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(endpoint);
+      setCopied(true);
+      toast({ variant: 'success', title: 'Copied', message: 'Peer address copied to clipboard.' });
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast({
+        variant: 'error',
+        title: 'Copy failed',
+        message: 'Clipboard access was denied or is unavailable.',
+      });
+    }
   };
 
   const testNetworkPorts = async () => {
@@ -155,6 +174,20 @@ export default function SettingsPage() {
         change('apiPort', recommended);
       }
 
+      if (openPorts.length > 0) {
+        toast({
+          variant: 'success',
+          title: 'Port test complete',
+          message: recommended ? `Recommended port: ${recommended}` : 'At least one port responded as open.',
+        });
+      } else {
+        toast({
+          variant: 'warning',
+          title: 'Port test finished',
+          message: 'No open standard ports detected from this machine.',
+        });
+      }
+
       if (window.bluetalk?.notify?.show) {
         const title = openPorts.length > 0
           ? 'BlueTalk network test complete'
@@ -164,10 +197,12 @@ export default function SettingsPage() {
           : 'No open standard ports detected.';
         window.bluetalk.notify.show({ title, body });
       }
-    } catch {
+    } catch (e) {
+      const msg = e?.message || 'The port probe could not be completed.';
+      toast({ variant: 'error', title: 'Port test failed', message: msg });
       window.bluetalk?.notify?.show?.({
         title: 'BlueTalk network test failed',
-        body: 'The port probe could not be completed.',
+        body: msg,
       });
     } finally {
       setTestingPorts(false);
@@ -225,20 +260,13 @@ export default function SettingsPage() {
             </h3>
           </div>
           <div className="card flex flex-col gap-3">
-            <div className="input-group">
-              <label>Display Name</label>
-              <input
-                className="input"
-                value={local.displayName || ''}
-                onChange={(e) => change('displayName', e.target.value)}
-                placeholder="Your name"
-              />
-            </div>
-            {peerInfo && (
+            {peerInfo ? (
               <div className="input-group">
                 <label>Peer ID</label>
                 <input className="input font-mono" value={peerInfo.id || ''} readOnly style={{ color: 'var(--fg-2)' }} />
               </div>
+            ) : (
+              <p className="text-sm text-muted" style={{ margin: 0 }}>Loading peer information…</p>
             )}
           </div>
         </section>
@@ -534,6 +562,24 @@ export default function SettingsPage() {
                   type="checkbox"
                   checked={local.minimizeToTray ?? true}
                   onChange={(e) => change('minimizeToTray', e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span className="toggle-row-label-with-icon">
+                  <Power size={15} strokeWidth={ICON_STROKE} aria-hidden />
+                  Launch at startup
+                </span>
+                <span>Open BlueTalk automatically when you sign in to this computer</span>
+              </div>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={local.launchAtLogin ?? false}
+                  onChange={(e) => change('launchAtLogin', e.target.checked)}
                 />
                 <span className="toggle-slider" />
               </label>
