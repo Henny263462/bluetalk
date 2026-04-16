@@ -349,6 +349,8 @@ class PeerServer extends EventEmitter {
         } catch {}
         this._broadcastPresence();
         this._discoveryTimer = setInterval(() => this._broadcastPresence(), DISCOVERY_INTERVAL);
+        // Rapid initial discovery: broadcast again quickly to find peers faster on startup
+        setTimeout(() => this._broadcastPresence(), 500);
         setTimeout(() => this._broadcastPresence(), 1500);
       });
     } catch (err) {

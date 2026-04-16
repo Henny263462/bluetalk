@@ -393,8 +393,8 @@ export default function App() {
     });
   }, []);
 
-  const sendMessage = useCallback(async (peerId, payload) => {
-    if (!window.bluetalk || !peerId) return false;
+  const sendMessage = useCallback((peerId, payload) => {
+    if (!window.bluetalk || !peerId) return Promise.resolve(false);
 
     const outgoing = typeof payload === 'string'
       ? { kind: 'chat', content: payload }
@@ -416,26 +416,35 @@ export default function App() {
       deliveryStatus: 'pending',
     };
 
-    try {
-      const sent = await window.bluetalk.peer.send(peerId, msg);
-      if (!sent) return false;
+    // Synchronous optimistic UI update — zero lag
+    setMessages((prev) => ({
+      ...prev,
+      [peerId]: [...(prev[peerId] || []), selfMessage],
+    }));
 
-      const meta = await window.bluetalk.messages.append(peerId, selfMessage);
+    setChatMeta((prev) => ({
+      ...prev,
+      [peerId]: {
+        count: (prev[peerId]?.count || 0) + 1,
+        lastMessage: selfMessage,
+      },
+    }));
 
-      setMessages((prev) => ({
-        ...prev,
-        [peerId]: [...(prev[peerId] || []), selfMessage],
-      }));
+    upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
 
-      setChatMeta((prev) => ({
-        ...prev,
-        [peerId]: meta?.count ? meta : {
-          count: (prev[peerId]?.count || 0) + 1,
-          lastMessage: selfMessage,
-        },
-      }));
+    // Network send + persistence happen entirely in the background
+    const sendPromise = Promise.all([
+      window.bluetalk.peer.send(peerId, msg),
+      window.bluetalk.messages.append(peerId, selfMessage),
+    ]).then(([sent, meta]) => {
+      if (!sent) {
+        void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
+        return false;
+      }
 
-      upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
+      if (meta?.count) {
+        setChatMeta((prev) => ({ ...prev, [peerId]: meta }));
+      }
 
       const t = setTimeout(() => {
         deliveryTimersRef.current.delete(messageId);
@@ -444,9 +453,12 @@ export default function App() {
       deliveryTimersRef.current.set(messageId, t);
 
       return true;
-    } catch {
+    }).catch(() => {
+      void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
       return false;
-    }
+    });
+
+    return sendPromise;
   }, [settings.displayName, upsertContact, applyMessagePatch]);
 
   const sendReadReceipt = useCallback(async (peerId, lastReadMessageId) => {

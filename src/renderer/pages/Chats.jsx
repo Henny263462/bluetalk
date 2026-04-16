@@ -44,11 +44,11 @@ function formatTime(ts) {
 }
 
 function selfDeliveryLabel(m) {
-  if (m.from !== 'self' || !m.messageId) return '';
-  if (m.deliveryStatus === 'scheduled') return 'Scheduled';
-  if (m.deliveryStatus === 'delivered') return 'Delivered';
-  if (m.deliveryStatus === 'pending') return 'Sending…';
-  return '';
+  if (m.from !== 'self' || !m.messageId) return { text: '', pending: false };
+  if (m.deliveryStatus === 'scheduled') return { text: 'Scheduled', pending: false };
+  if (m.deliveryStatus === 'delivered') return { text: 'Delivered', pending: false };
+  if (m.deliveryStatus === 'pending') return { text: 'Sending', pending: true };
+  return { text: '', pending: false };
 }
 
 function formatSize(bytes) {
@@ -787,25 +787,30 @@ export default function ChatsPage() {
     }
   };
 
-  const send = async () => {
+  const send = () => {
     if (!selectedPeer) return;
     if (!input.trim() && !pendingFile) return;
     if (sendingFile) return;
 
     setWarning('');
+    const peerId = selectedPeer.id;
 
+    // Text messages: clear input immediately, send in background (fire-and-forget)
     if (input.trim()) {
-      const ok = await sendMessage(selectedPeer.id, { kind: 'chat', content: input.trim() });
-      if (!ok) {
-        const msg = 'Message could not be delivered. Peer is probably offline.';
-        setWarning(msg);
-        toast({ variant: 'error', title: 'Message not sent', message: msg });
-        return;
-      }
+      const text = input.trim();
       setInput('');
+      // sendMessage is already optimistic (shows message instantly)
+      sendMessage(peerId, { kind: 'chat', content: text }).then((ok) => {
+        if (!ok) {
+          toast({ variant: 'error', title: 'Message not sent', message: 'Peer is probably offline.' });
+        }
+      });
     }
 
+    // File messages: keep progress bar but send async
     if (pendingFile) {
+      const file = pendingFile;
+      setPendingFile(null);
       let progressTimer = null;
       setFileTransfer({ stage: 'sending', percent: 48, detail: 'Sending attachment…' });
       progressTimer = setInterval(() => {
@@ -814,28 +819,27 @@ export default function ChatsPage() {
           return { ...prev, percent: Math.min(96, prev.percent + 1.1) };
         });
       }, 120);
-      try {
-        const ok = await sendMessage(selectedPeer.id, {
-          kind: 'file',
-          content: pendingFile.name,
-          fileName: pendingFile.name,
-          fileSize: pendingFile.size,
-          fileType: pendingFile.type,
-          fileData: pendingFile.base64,
-        });
+
+      sendMessage(peerId, {
+        kind: 'file',
+        content: file.name,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+        fileData: file.base64,
+      }).then((ok) => {
+        if (progressTimer) clearInterval(progressTimer);
         if (!ok) {
-          const msg = 'File could not be delivered. Peer is probably offline.';
-          setWarning(msg);
-          toast({ variant: 'error', title: 'File not sent', message: msg });
+          toast({ variant: 'error', title: 'File not sent', message: 'Peer is probably offline.' });
           setFileTransfer(null);
           return;
         }
         setFileTransfer({ stage: 'sending', percent: 100, detail: 'Sent' });
-        setPendingFile(null);
         setTimeout(() => setFileTransfer(null), 400);
-      } finally {
+      }).catch(() => {
         if (progressTimer) clearInterval(progressTimer);
-      }
+        setFileTransfer(null);
+      });
     }
   };
 
@@ -1108,14 +1112,22 @@ export default function ChatsPage() {
                 {hasMoreMessages && (
                   <div className="chat-load-more">
                     <button className="btn btn-secondary btn-sm" onClick={loadOlderMessages} disabled={loadingMore}>
-                      {loadingMore ? 'Loading...' : `Load ${Math.min(CHAT_BATCH_SIZE, selectedPeer.messageCount - msgs.length)} older messages`}
+                      {loadingMore ? (
+                        <span className="spinner-label">
+                          <span className="spinner spinner--sm" />
+                          <span>Loading</span>
+                        </span>
+                      ) : `Load ${Math.min(CHAT_BATCH_SIZE, selectedPeer.messageCount - msgs.length)} older messages`}
                     </button>
                   </div>
                 )}
 
                 {loadingMessages && msgs.length === 0 && (
                   <div className="chat-empty">
-                    <p className="text-muted">Loading messages...</p>
+                    <span className="spinner-label">
+                      <span className="spinner spinner--md" />
+                      <span>Loading messages</span>
+                    </span>
                   </div>
                 )}
 
@@ -1132,7 +1144,6 @@ export default function ChatsPage() {
                   const bareMedia = isBareMediaMessage(m);
                   const delivery = selfDeliveryLabel(m);
                   const seen = isSelf && readUpToId && m.messageId && readUpToId === m.messageId ? 'Seen' : '';
-                  const statusLine = [delivery, seen].filter(Boolean).join(' · ');
                   return (
                     <div
                       key={m.messageId || `${m.timestamp || i}-${m.from || 'msg'}-${i}`}
@@ -1159,7 +1170,14 @@ export default function ChatsPage() {
                         )}
                         <div className={`msg-meta${isSelf ? ' msg-meta--self' : ''}`}>
                           <span className="msg-time">{formatMessageTime(m.timestamp)}</span>
-                          {statusLine ? <span className="msg-delivery">{statusLine}</span> : null}
+                          {delivery.pending ? (
+                            <span className="msg-delivery msg-delivery-pending">
+                              <span className="spinner spinner--sm spinner--accent" />
+                              <span>{delivery.text}</span>
+                            </span>
+                          ) : (delivery.text || seen) ? (
+                            <span className="msg-delivery">{[delivery.text, seen].filter(Boolean).join(' · ')}</span>
+                          ) : null}
                         </div>
                         {m.messageId && (
                           <button
@@ -1290,7 +1308,12 @@ export default function ChatsPage() {
             <div className="modal-actions">
               <button className="btn btn-secondary" onClick={() => setShowConnect(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleConnect} disabled={!connectAddress.trim() || connecting}>
-                {connecting ? 'Connecting...' : 'Connect'}
+                {connecting ? (
+                  <span className="spinner-label">
+                    <span className="spinner spinner--sm spinner--accent" />
+                    <span>Connecting</span>
+                  </span>
+                ) : 'Connect'}
               </button>
             </div>
           </div>
@@ -1370,7 +1393,12 @@ export default function ChatsPage() {
                 onClick={confirmDeleteChat}
                 disabled={deletingChat}
               >
-                {deletingChat ? 'Deleting…' : 'Delete chat'}
+                {deletingChat ? (
+                  <span className="spinner-label">
+                    <span className="spinner spinner--sm spinner--accent" />
+                    <span>Deleting</span>
+                  </span>
+                ) : 'Delete chat'}
               </button>
             </div>
           </div>

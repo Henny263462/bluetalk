@@ -855,7 +855,16 @@ if (!gotSingleInstanceLock) {
     setupAutoUpdater();
     applyLaunchAtLoginSetting();
 
-    peerServer.start();
+    peerServer.start().then(() => {
+      // Proactively reconnect to all known contacts on startup
+      const contacts = store.get('contacts', []);
+      if (Array.isArray(contacts)) {
+        for (const contact of contacts) {
+          if (!contact?.id || !contact.address) continue;
+          peerServer.connectTo(contact.address).catch(() => {});
+        }
+      }
+    });
     apiServer.start(store.get('settings.apiPort', 19876));
   });
 }
