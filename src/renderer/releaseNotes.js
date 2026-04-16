@@ -3,6 +3,15 @@
  * When you ship a new version, add a matching key here (same as package.json version).
  */
 const RELEASE_NOTES = {
+  '1.1.4': {
+    title: "What's new in BlueTalk 1.1.4",
+    items: [
+      'Plugin system: install plugins to add sidebar tabs, modal screens and react to realtime peer events.',
+      'Plugins have access to peers, contacts, messages, E2EE-aware chat sends, notifications and per-plugin storage.',
+      'New Plugins page in the sidebar to enable, disable, uninstall and rescan plugins. First launch seeds a "Hello" example plugin.',
+      'Plugin APIs: events.on() for peer:connected/disconnected/message/file-offered/file-received/discovered, plus ui.registerTab, ui.registerScreen and registerCommand.',
+    ],
+  },
   '1.1.3': {
     title: "What's new in BlueTalk 1.1.3",
     items: [

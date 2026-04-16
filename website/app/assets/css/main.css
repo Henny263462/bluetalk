@@ -871,6 +871,58 @@ p {
   gap: 8px;
 }
 
+.download-version-line {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.download-latest-pill {
+  flex-shrink: 0;
+}
+
+.release-changelog--featured {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.releases-timeline-intro {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+.releases-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-left: 8px;
+  padding-left: 22px;
+  border-left: 2px solid var(--border);
+}
+
+.releases-timeline-item {
+  position: relative;
+}
+
+.releases-timeline-item::before {
+  content: '';
+  position: absolute;
+  left: -27px;
+  top: 18px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: var(--bg-1);
+  border: 2px solid var(--border-strong);
+}
+
 .release-item {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

@@ -79,6 +79,19 @@ contextBridge.exposeInMainWorld('bluetalk', {
     readConfigTail: (maxBytes) => ipcRenderer.invoke('app:readConfigTail', maxBytes),
   },
 
+  plugins: {
+    list: () => ipcRenderer.invoke('plugins:list'),
+    rescan: () => ipcRenderer.invoke('plugins:rescan'),
+    setEnabled: (id, enabled) => ipcRenderer.invoke('plugins:setEnabled', id, enabled),
+    openDir: () => ipcRenderer.invoke('plugins:openDir'),
+    installFromDialog: () => ipcRenderer.invoke('plugins:installFromDialog'),
+    install: (payload) => ipcRenderer.invoke('plugins:install', payload),
+    uninstall: (id) => ipcRenderer.invoke('plugins:uninstall', id),
+    invokeCommand: (id, commandId, args) =>
+      ipcRenderer.invoke('plugins:invokeCommand', id, commandId, args),
+    sendToMain: (id, payload) => ipcRenderer.invoke('plugins:sendToMain', id, payload),
+  },
+
   // Events from main process
   on: (channel, callback) => {
     const validChannels = [
@@ -91,6 +104,10 @@ contextBridge.exposeInMainWorld('bluetalk', {
       'peers:list-sync',
       'updater:state',
       'app:data-cleared',
+      'plugins:event',
+      'plugins:changed',
+      'plugins:message',
+      'plugins:contacts-updated',
     ];
     if (validChannels.includes(channel)) {
       const listener = (_, ...args) => callback(...args);

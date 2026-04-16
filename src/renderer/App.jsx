@@ -1,16 +1,22 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, startTransition, createContext, useContext } from 'react';
+import ReactDOM from 'react-dom';
 import { HashRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { MessageCircle, Settings as SettingsIcon, UserPlus, Minus, Maximize2, SquareStack, X } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
+import { MessageCircle, Settings as SettingsIcon, UserPlus, Minus, Maximize2, SquareStack, X, Plug } from 'lucide-react';
 
 import ChatsPage from './pages/Chats';
 import SettingsPage from './pages/Settings';
 import NewConnectionsPage from './pages/NewConnections';
 import CloudSyncPage from './pages/CloudSync';
 import NotFoundPage from './pages/NotFound';
+import PluginsPage from './pages/Plugins';
 import RuntimeUnavailablePage from './pages/RuntimeUnavailable';
 import NotificationCenter from './components/NotificationCenter';
 import ProfileMenu from './components/ProfileMenu';
-import { ToastProvider } from './components/ToastProvider';
+import { ToastProvider, useToast } from './components/ToastProvider';
+import PluginTabView from './plugins/PluginTabView';
+import PluginScreenHost from './plugins/PluginScreenHost';
+import { pluginRuntime } from './plugins/pluginRuntime';
 import ErrorBoundary from './components/ErrorBoundary';
 import VersionWelcomeModal from './components/VersionWelcomeModal';
 import UsernameOnboardingModal from './components/UsernameOnboardingModal';
@@ -84,6 +90,21 @@ function contactWantsOutgoingE2ee(settingsRef, contactsRef, peerId) {
   return true;
 }
 
+function PluginRuntimeToastBridge() {
+  const { toast } = useToast();
+  useEffect(() => {
+    const current = pluginRuntime._host || {};
+    pluginRuntime.setHost({ ...current, toast });
+    return () => {
+      const latest = pluginRuntime._host || {};
+      if (latest.toast === toast) {
+        pluginRuntime.setHost({ ...latest, toast: null });
+      }
+    };
+  }, [toast]);
+  return null;
+}
+
 function TitleBar() {
   const { peerCount } = useApp();
   const [isMaximized, setIsMaximized] = useState(false);
@@ -136,10 +157,27 @@ function TitleBar() {
   );
 }
 
+function resolveLucideIcon(name) {
+  if (!name || typeof name !== 'string') return Plug;
+  const direct = LucideIcons[name];
+  if (direct) return direct;
+  const camel = name.charAt(0).toUpperCase() + name.slice(1);
+  return LucideIcons[camel] || Plug;
+}
+
 function Sidebar() {
+  const [pluginTabs, setPluginTabs] = useState(() => pluginRuntime.listTabs());
+
+  useEffect(() => {
+    const off = pluginRuntime.onTabsChanged((tabs) => setPluginTabs(tabs));
+    setPluginTabs(pluginRuntime.listTabs());
+    return off;
+  }, []);
+
   const links = [
     { to: '/', label: 'Chats', icon: MessageCircle },
     { to: '/new', label: 'New', icon: UserPlus },
+    { to: '/plugins', label: 'Plugins', icon: Plug },
     { to: '/settings', label: 'Settings', icon: SettingsIcon },
   ];
 
@@ -157,6 +195,23 @@ function Sidebar() {
             <span>{label}</span>
           </NavLink>
         ))}
+        {pluginTabs.length > 0 ? (
+          <div className="sidebar-section-label">Plugins</div>
+        ) : null}
+        {pluginTabs.map((tab) => {
+          const Icon = resolveLucideIcon(tab.icon);
+          return (
+            <NavLink
+              key={tab.tabId}
+              to={tab.path}
+              className={({ isActive }) => `sidebar-link sidebar-link-plugin ${isActive ? 'active' : ''}`}
+              title={tab.label}
+            >
+              <Icon size={15} strokeWidth={2} />
+              <span>{tab.label}</span>
+            </NavLink>
+          );
+        })}
       </div>
       <div className="sidebar-footer">
         <div className="sidebar-notif">
@@ -1066,6 +1121,32 @@ export default function App() {
     setContactBlocked,
   };
 
+  const peersRef = useRef(peers);
+  const messagesRef = useRef(messages);
+  useEffect(() => { peersRef.current = peers; }, [peers]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+  useEffect(() => {
+    if (!window.bluetalk?.plugins) return undefined;
+    pluginRuntime.setHost({
+      getPeers: () => peersRef.current,
+      getContacts: () => contactsRef.current,
+      getMessages: (peerId) => (peerId ? messagesRef.current[peerId] || [] : messagesRef.current),
+      sendMessage,
+      deleteMessage,
+      deleteChat,
+      upsertContact,
+      removeContact,
+      setContactBlocked,
+      setContactNickname,
+      setChatPinned,
+      toast: null,
+    });
+    pluginRuntime.injectReact(React, ReactDOM);
+    void pluginRuntime.boot();
+    return undefined;
+  }, [sendMessage, deleteMessage, deleteChat, upsertContact, removeContact, setContactBlocked, setContactNickname, setChatPinned]);
+
   if (!window.bluetalk) {
     return (
       <AppContext.Provider value={ctx}>
@@ -1081,6 +1162,7 @@ export default function App() {
       <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
         <ErrorBoundary>
           <HashRouter>
+            <PluginRuntimeToastBridge />
             <div className="app">
               <UsernameOnboardingModal
                 open={showUsernameOnboarding}
@@ -1109,10 +1191,13 @@ export default function App() {
                     <Route path="/new" element={<NewConnectionsPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/cloud-sync" element={<CloudSyncPage />} />
+                    <Route path="/plugins" element={<PluginsPage />} />
+                    <Route path="/plugin/:tabId" element={<PluginTabView />} />
                     <Route path="*" element={<NotFoundPage />} />
                   </Routes>
                 </main>
               </div>
+              <PluginScreenHost />
             </div>
           </HashRouter>
         </ErrorBoundary>

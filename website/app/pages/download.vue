@@ -41,18 +41,48 @@ const { data, pending, error } = await useFetch<ReleasePayload>('/api/releases/l
   key: 'bluetalk-latest-release',
 })
 
-const { data: allData } = await useFetch<{ releases: ReleaseEntry[]; error: string | null }>(
-  '/api/releases/all',
-  { key: 'bluetalk-all-releases' },
-)
+const { data: allData, pending: allPending } = await useFetch<{
+  releases: ReleaseEntry[]
+  error: string | null
+}>('/api/releases/all', { key: 'bluetalk-all-releases' })
 
 /** Same repo as `server/utils/releases.ts` — external URL so static prerender never crawls /api/releases/download (404 without assets). */
 const githubReleasesPage = 'https://github.com/Henny263462/bluetalk/releases'
 
 const baseMeta = ['Setup · Windows · .exe', 'No install · Windows · .exe'] as const
 
+const allReleases = computed<ReleaseEntry[]>(() => allData.value?.releases ?? [])
+
+/** Newest published release (GitHub order); drives the featured block and headline tag. */
+const newestRelease = computed(() => allReleases.value[0] ?? null)
+
+/** Older releases only — shown as a timeline below the featured newest release. */
+const timelineReleases = computed(() => allReleases.value.slice(1))
+
+/**
+ * Prefer Windows assets from the newest GitHub release when present; otherwise use the
+ * fallback from `/api/releases/latest` (e.g. newest tag has no .exe yet).
+ */
+const downloadSource = computed(() => {
+  const n = newestRelease.value
+  if (n && (n.installer || n.portable)) {
+    return {
+      tag: n.tag,
+      installer: n.installer,
+      portable: n.portable,
+    }
+  }
+  return {
+    tag: data.value?.tag ?? null,
+    installer: data.value?.installer ?? null,
+    portable: data.value?.portable ?? null,
+  }
+})
+
+const pagePending = computed(() => pending.value || allPending.value)
+
 const cards = computed(() => {
-  const d = data.value
+  const d = downloadSource.value
   const installerMeta = d?.installer?.size
     ? `Setup · Windows · .exe · ${formatBytes(d.installer.size)}`
     : baseMeta[0]
@@ -86,18 +116,25 @@ const releaseVersionText = computed(() => {
   return tag || null
 })
 
+/** Tag for the release that actually supplies the download URLs in the cards (may differ when the newest tag has no Windows build yet). */
+const offeredReleaseTag = computed(() => downloadSource.value.tag?.trim() || null)
+
 const pendingLatestTag = computed(() => data.value?.pendingLatestTag?.trim() || null)
 
-/** Always reflect the absolute latest known tag, even when its build is still uploading. */
-const displayVersionText = computed(() => pendingLatestTag.value || releaseVersionText.value)
+/** Headline: true newest tag from the full release list, then GitHub “latest” pending tag, then API fallback. */
+const headlineReleaseTag = computed(() => {
+  return (
+    newestRelease.value?.tag?.trim() || pendingLatestTag.value || releaseVersionText.value || null
+  )
+})
 
 const showBuildPendingNotice = computed(
-  () => Boolean(!pending.value && pendingLatestTag.value),
+  () => Boolean(!pagePending.value && pendingLatestTag.value),
 )
 
 const buildPendingNoticeText = computed(() => {
   const pend = pendingLatestTag.value
-  const offered = releaseVersionText.value
+  const offered = offeredReleaseTag.value
   if (!pend) return ''
   if (offered && offered !== pend) {
     return `GitHub's current release ${pend} does not list Windows installers yet—the build may still be uploading. The downloads below are from ${offered}, the newest release that already includes Windows installers.`
@@ -116,15 +153,6 @@ const apiWarningText = computed(() => {
   return ''
 })
 
-const allReleases = computed<ReleaseEntry[]>(() => allData.value?.releases ?? [])
-
-/** Releases older than the one currently offered for download. */
-const olderReleases = computed(() => {
-  const offered = releaseVersionText.value
-  if (!offered) return allReleases.value.slice(1)
-  const idx = allReleases.value.findIndex((r) => r.tag === offered)
-  return idx >= 0 ? allReleases.value.slice(idx + 1) : allReleases.value.slice(1)
-})
 </script>
 
 <template>
@@ -134,11 +162,16 @@ const olderReleases = computed(() => {
         <div class="section-heading download-heading">
           <span class="section-tag">Get BlueTalk</span>
           <h1>Download Options</h1>
-          <p v-if="pending" class="download-version-indicator" aria-live="polite">
+          <p v-if="pagePending" class="download-version-indicator" aria-live="polite">
             Download BlueTalk …
           </p>
-          <p v-else-if="displayVersionText" class="download-version-indicator">
-            Download BlueTalk {{ displayVersionText }}
+          <p v-else-if="headlineReleaseTag" class="download-version-indicator">
+            <span class="download-version-line">
+              Download BlueTalk {{ headlineReleaseTag }}
+              <span v-if="newestRelease" class="release-latest-badge download-latest-pill"
+                >Latest release</span
+              >
+            </span>
           </p>
           <p v-else class="download-version-indicator download-version-indicator--muted">
             Download BlueTalk
@@ -155,29 +188,42 @@ const olderReleases = computed(() => {
           </p>
         </div>
 
-        <div v-if="pending" class="download-placeholder" aria-live="polite">
+        <div v-if="pagePending" class="download-placeholder" aria-live="polite">
           Resolving latest release and download links…
         </div>
 
-        <div v-else class="download-grid">
-          <DownloadCard
-            v-for="item in cards"
-            :key="item.key"
-            :eyebrow="item.eyebrow"
-            :title="item.title"
-            :description="item.description"
-            :meta="item.meta"
-            :href="item.href"
-          />
-        </div>
+        <template v-else>
+          <div class="download-grid">
+            <DownloadCard
+              v-for="item in cards"
+              :key="item.key"
+              :eyebrow="item.eyebrow"
+              :title="item.title"
+              :description="item.description"
+              :meta="item.meta"
+              :href="item.href"
+            />
+          </div>
+
+          <details
+            v-if="newestRelease?.body"
+            class="release-changelog release-changelog--featured"
+            open
+          >
+            <summary class="release-changelog-toggle">
+              Changelog · {{ newestRelease.tag }}
+            </summary>
+            <pre class="release-changelog-body">{{ newestRelease.body }}</pre>
+          </details>
+        </template>
       </div>
     </section>
 
-    <!-- Release history -->
-    <section v-if="allReleases.length" class="section releases-section">
+    <!-- Older releases timeline -->
+    <section v-if="timelineReleases.length" class="section releases-section">
       <div class="container">
         <div class="releases-header">
-          <h2 class="releases-title">Release History</h2>
+          <h2 class="releases-title">Earlier releases</h2>
           <a
             :href="githubReleasesPage"
             target="_blank"
@@ -185,17 +231,20 @@ const olderReleases = computed(() => {
             class="releases-github-link"
           >View on GitHub</a>
         </div>
+        <p class="releases-timeline-intro">
+          Newest version is above; older builds stay available below.
+        </p>
 
-        <div class="releases-list">
+        <div class="releases-timeline" role="list">
           <div
-            v-for="(release, i) in allReleases"
+            v-for="release in timelineReleases"
             :key="release.tag"
-            class="release-item"
+            class="release-item releases-timeline-item"
+            role="listitem"
           >
             <div class="release-item-top">
               <div class="release-item-meta">
                 <span class="release-tag-badge">{{ release.tag }}</span>
-                <span v-if="i === 0" class="release-latest-badge">Latest</span>
                 <span v-if="release.publishedAt" class="release-date">
                   {{ formatDate(release.publishedAt) }}
                 </span>
@@ -225,7 +274,7 @@ const olderReleases = computed(() => {
               <span v-else class="release-no-assets">No Windows builds</span>
             </div>
 
-            <details v-if="release.body" class="release-changelog" :open="i === 0">
+            <details v-if="release.body" class="release-changelog">
               <summary class="release-changelog-toggle">Changelog</summary>
               <pre class="release-changelog-body">{{ release.body }}</pre>
             </details>

@@ -6,11 +6,13 @@ const path = require('path');
 const { PeerServer, normalizeConnectAddress } = require(path.join(__dirname, '..', 'shared', 'peer-server.js'));
 const { APIServer } = require(path.join(__dirname, '..', 'shared', 'api-server.js'));
 const Store = require(path.join(__dirname, '..', 'shared', 'store.js'));
+const { PluginHost } = require(path.join(__dirname, 'plugin-host.js'));
 
 let mainWindow = null;
 let tray = null;
 let peerServer = null;
 let apiServer = null;
+let pluginHost = null;
 let store = null;
 /** Last port the REST API successfully bound to; used to avoid unnecessary restarts. */
 let lastApiServerPort = null;
@@ -357,6 +359,7 @@ function installDownloadedUpdate() {
   isQuitting = true;
   peerServer?.stop();
   apiServer?.stop();
+  pluginHost?.stop().catch(() => {});
   // Silent NSIS (/S) + --force-run: no setup wizard; app restarts after install (Windows).
   autoUpdater.quitAndInstall(true, true);
   return true;
@@ -481,6 +484,44 @@ function setupAutoUpdater() {
     setTimeout(() => {
       void checkForAppUpdates('startup');
     }, 5000);
+  }
+}
+
+async function seedBundledPlugins(host) {
+  if (!host) return;
+  const bundledDir = path.join(__dirname, '..', '..', 'assets', 'bundled-plugins');
+  let entries = [];
+  try {
+    entries = await fs.readdir(bundledDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const pluginsDir = host.getPluginsDir();
+  const seeded = store?.get('plugins.seeded', {}) || {};
+  let dirty = false;
+  for (const entry of entries) {
+    if (typeof entry.isDirectory === 'function' && !entry.isDirectory()) continue;
+    const srcDir = path.join(bundledDir, entry.name);
+    const destDir = path.join(pluginsDir, entry.name);
+    let destExists = true;
+    try {
+      await fs.access(destDir);
+    } catch {
+      destExists = false;
+    }
+    // Only seed on first run — once a user has seen a bundled plugin, don't recreate it if they uninstall.
+    if (!destExists && !seeded[entry.name]) {
+      try {
+        await host.installFromDirectory(srcDir);
+        seeded[entry.name] = true;
+        dirty = true;
+      } catch (e) {
+        console.error(`[PluginHost] seed ${entry.name}:`, e);
+      }
+    }
+  }
+  if (dirty && store) {
+    store.set('plugins.seeded', seeded);
   }
 }
 
@@ -1021,6 +1062,70 @@ function setupIPC() {
 
   ipcMain.handle('app:wipeAllData', () => wipeAllLocalAppData());
 
+  ipcMain.handle('plugins:list', () => pluginHost?.listPlugins() || []);
+  ipcMain.handle('plugins:setEnabled', async (_, id, enabled) => {
+    if (!pluginHost) return false;
+    return pluginHost.setPluginEnabled(id, Boolean(enabled));
+  });
+  ipcMain.handle('plugins:rescan', async () => {
+    if (!pluginHost) return [];
+    return pluginHost.scan();
+  });
+  ipcMain.handle('plugins:openDir', async () => {
+    if (!pluginHost) return { ok: false, error: 'not_ready' };
+    const dir = pluginHost.getPluginsDir();
+    try {
+      const { shell } = require('electron');
+      await shell.openPath(dir);
+      return { ok: true, path: dir };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'open_failed' };
+    }
+  });
+  ipcMain.handle('plugins:install', async (_, payload) => {
+    if (!pluginHost) return { ok: false, error: 'not_ready' };
+    try {
+      let result;
+      if (payload?.dir) {
+        result = await pluginHost.installFromDirectory(payload.dir);
+      } else if (payload?.id && payload?.files) {
+        result = await pluginHost.installFromPayload(payload);
+      } else {
+        return { ok: false, error: 'invalid_payload' };
+      }
+      return { ok: true, plugin: result };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'install_failed' };
+    }
+  });
+  ipcMain.handle('plugins:installFromDialog', async () => {
+    if (!pluginHost) return { ok: false, error: 'not_ready' };
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select a plugin folder',
+      properties: ['openDirectory'],
+    });
+    if (canceled || !filePaths?.[0]) return { ok: false, canceled: true };
+    try {
+      const result = await pluginHost.installFromDirectory(filePaths[0]);
+      return { ok: true, plugin: result };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'install_failed' };
+    }
+  });
+  ipcMain.handle('plugins:uninstall', async (_, id) => {
+    if (!pluginHost) return false;
+    return pluginHost.uninstall(id);
+  });
+  ipcMain.handle('plugins:invokeCommand', async (_, id, commandId, args) => {
+    if (!pluginHost) return { ok: false, error: 'not_ready' };
+    return pluginHost.invokeCommand(id, commandId, args);
+  });
+  ipcMain.handle('plugins:sendToMain', async (_, id, payload) => {
+    if (!pluginHost) return false;
+    await pluginHost.onUiMessage(id, payload);
+    return true;
+  });
+
   const forwardEvents = [
     'peer:connected',
     'peer:disconnected',
@@ -1075,6 +1180,20 @@ if (!gotSingleInstanceLock) {
     const initialApiPort = store.get('settings.apiPort', 19876);
     apiServer.start(initialApiPort);
     lastApiServerPort = initialApiPort;
+
+    pluginHost = new PluginHost({
+      peerServer,
+      store,
+      mainWindowRef: () => mainWindow,
+    });
+    (async () => {
+      try {
+        await seedBundledPlugins(pluginHost);
+      } catch (e) {
+        console.error('[PluginHost] seed bundled plugins:', e);
+      }
+      await pluginHost.init().catch((e) => console.error('[PluginHost] init failed:', e));
+    })();
   });
 }
 
@@ -1090,6 +1209,7 @@ app.on('window-all-closed', () => {
 
   peerServer?.stop();
   apiServer?.stop();
+  pluginHost?.stop().catch(() => {});
   app.quit();
 });
 

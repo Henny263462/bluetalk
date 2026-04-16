@@ -1,0 +1,11 @@
+{
+  "id": "hello",
+  "name": "Hello Plugin",
+  "version": "1.0.0",
+  "description": "Example BlueTalk plugin. Adds a sidebar tab that shows peer events in real time and lets you broadcast a ping.",
+  "author": "BlueTalk",
+  "main": "main.js",
+  "ui": "ui.js",
+  "permissions": ["peer:broadcast", "contacts:read", "tabs:register"],
+  "autoEnable": true
+}
