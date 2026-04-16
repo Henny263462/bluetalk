@@ -3,6 +3,14 @@
  * When you ship a new version, add a matching key here (same as package.json version).
  */
 const RELEASE_NOTES = {
+  '1.1.2': {
+    title: "What's new in BlueTalk 1.1.2",
+    items: [
+      'Larger chat attachments (up to 15 GB per file) with a higher transport limit for big sends.',
+      'Block and unblock contacts from the chat header or list context menu; blocked peers cannot message you.',
+      'End-to-end encryption for chat and file payloads between peers (AES-256-GCM over ECDH P-256).',
+    ],
+  },
   '1.1.0': {
     title: "What's new in BlueTalk 1.1.0",
     items: [

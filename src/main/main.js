@@ -687,15 +687,23 @@ function flushIncomingNotificationBatch() {
   );
 }
 
+function isContactBlockedInStore(peerId) {
+  if (!store || !peerId) return false;
+  const contacts = store.get('contacts', []);
+  return contacts.some((c) => c && c.id === peerId && c.blocked === true);
+}
+
 function queueIncomingChatNotification(data) {
   if (store && store.get('settings.windowsNotifications', true) === false) {
     return;
   }
   const senderLabel = data.sender || data.from || 'BlueTalk';
   const preview =
-    data.kind === 'file'
-      ? `File: ${data.fileName || data.content || 'Attachment'}`
-      : (data.content || 'New message');
+    data.kind === 'encrypted-chat-e2ee'
+      ? 'New encrypted message'
+      : data.kind === 'file'
+        ? `File: ${data.fileName || data.content || 'Attachment'}`
+        : (data.content || 'New message');
 
   if (incomingNotifBatch.senderLabel !== senderLabel) {
     flushIncomingNotificationBatch();
@@ -1021,7 +1029,9 @@ function setupIPC() {
     peerServer.on(event, (data) => {
       if (event === 'peer:message' && data?.from !== 'self' && data?.kind !== 'profile') {
         if (data.kind !== 'delivery-receipt' && data.kind !== 'read-receipt') {
-          queueIncomingChatNotification(data);
+          if (!isContactBlockedInStore(data.from)) {
+            queueIncomingChatNotification(data);
+          }
         }
       }
       mainWindow?.webContents.send(event, data);

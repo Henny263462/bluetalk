@@ -33,7 +33,8 @@ const MAX_LISTEN_PORTS = 4;
 /** Data URLs for avatars can exceed 200k chars (see ProfileMenu MAX_AVATAR_BYTES); keep handshake/profile sync usable. */
 const MAX_PROFILE_PICTURE_DATA_URL_CHARS = 2 * 1024 * 1024;
 /** Reject absurd frames to avoid OOM (chat attachments are large but not multi‑GB over this JSON transport). */
-const MAX_WEBSOCKET_PAYLOAD_BYTES = 80 * 1024 * 1024;
+/** Large chat attachments (base64 JSON). 512 MiB cap per assembled WS text frame. */
+const MAX_WEBSOCKET_PAYLOAD_BYTES = 512 * 1024 * 1024;
 const DISCOVERY_PORT = 41234;
 const DISCOVERY_INTERVAL = 5000;
 const DISCOVERY_MAGIC = 'BLUETALK_V2';

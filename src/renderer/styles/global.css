@@ -211,6 +211,7 @@ body {
 .list-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 8px; cursor: pointer; transition: 0.12s; }
 .list-item:hover { background: var(--bg-hover); }
 .list-item.active { background: var(--bg-active); }
+.list-item--blocked { opacity: 0.62; }
 .list-item-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--accent-soft); color: var(--fg-0); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex-shrink: 0; border: 1px solid var(--border); }
 .list-item-info { flex: 1; min-width: 0; }
 .list-item-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
