@@ -67,6 +67,12 @@ contextBridge.exposeInMainWorld('bluetalk', {
     install: () => ipcRenderer.invoke('updater:install'),
   },
 
+  app: {
+    clearCache: () => ipcRenderer.invoke('app:clearCache'),
+    clearMessages: () => ipcRenderer.invoke('app:clearMessages'),
+    wipeAllData: () => ipcRenderer.invoke('app:wipeAllData'),
+  },
+
   // Events from main process
   on: (channel, callback) => {
     const validChannels = [
@@ -78,6 +84,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
       'peer:discovered',
       'peers:list-sync',
       'updater:state',
+      'app:data-cleared',
     ];
     if (validChannels.includes(channel)) {
       const listener = (_, ...args) => callback(...args);

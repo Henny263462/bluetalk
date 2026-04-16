@@ -20,6 +20,7 @@ import {
   Settings2,
   Sun,
   TestTube2,
+  Trash2,
   User,
 } from 'lucide-react';
 
@@ -85,6 +86,7 @@ export default function SettingsPage() {
   const [testingPorts, setTestingPorts] = useState(false);
   const [updaterState, setUpdaterState] = useState(null);
   const [updateAction, setUpdateAction] = useState('');
+  const [dataAction, setDataAction] = useState('');
 
   useEffect(() => {
     setLocal(settings);
@@ -230,6 +232,82 @@ export default function SettingsPage() {
   const checkForUpdates = () => runUpdaterAction('check', () => window.bluetalk.updater.check());
   const downloadUpdate = () => runUpdaterAction('download', () => window.bluetalk.updater.download());
   const installUpdate = () => runUpdaterAction('install', () => window.bluetalk.updater.install());
+
+  const runDataAction = async (actionKey, fn) => {
+    if (!window.bluetalk?.app || dataAction) return;
+    setDataAction(actionKey);
+    try {
+      return await fn();
+    } finally {
+      setDataAction('');
+    }
+  };
+
+  const clearAppCache = () => runDataAction('cache', async () => {
+    const ok = window.confirm(
+      'Clear the in-app browser cache and web storage (localStorage, etc.)? Your chats and settings stay on disk until you delete them separately.'
+    );
+    if (!ok) return;
+
+    const result = await window.bluetalk.app.clearCache();
+    if (result?.ok) {
+      toast({
+        variant: 'success',
+        title: 'Cache cleared',
+        message: 'Temporary web data was removed.',
+      });
+    } else {
+      toast({
+        variant: 'error',
+        title: 'Could not clear cache',
+        message: result?.error || 'Unknown error',
+      });
+    }
+  });
+
+  const clearChatHistoryOnly = () => runDataAction('messages', async () => {
+    const ok = window.confirm(
+      'Delete all saved chat messages and read receipts? Contacts and settings are kept.'
+    );
+    if (!ok) return;
+
+    const result = await window.bluetalk.app.clearMessages();
+    if (result?.ok) {
+      toast({
+        variant: 'success',
+        title: 'Chats cleared',
+        message: 'All stored messages were removed.',
+      });
+    } else {
+      toast({
+        variant: 'error',
+        title: 'Could not clear chats',
+        message: result?.error || 'Unknown error',
+      });
+    }
+  });
+
+  const wipeAllAppData = () => runDataAction('wipe', async () => {
+    const ok = window.confirm(
+      'Delete ALL local BlueTalk data (chats, contacts, settings, identity)? This cannot be undone. The app will reload your empty profile.'
+    );
+    if (!ok) return;
+
+    const result = await window.bluetalk.app.wipeAllData();
+    if (result?.ok) {
+      toast({
+        variant: 'success',
+        title: 'All data deleted',
+        message: 'Local storage was reset. You may get a new peer ID.',
+      });
+    } else {
+      toast({
+        variant: 'error',
+        title: 'Delete failed',
+        message: result?.error || 'Unknown error',
+      });
+    }
+  });
 
   const isCheckingUpdates = updateAction === 'check' || updaterState?.status === 'checking';
   const isDownloadingUpdate = updateAction === 'download' || updaterState?.status === 'downloading';
@@ -519,6 +597,63 @@ export default function SettingsPage() {
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section style={{ marginBottom: 28 }}>
+          <div className="section-title">
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <Trash2 size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Data &amp; storage
+            </h3>
+          </div>
+          <div className="card flex flex-col gap-0">
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Clear cache</span>
+                <span>Removes Chromium disk cache and web storage for this window. Does not delete your chat history file.</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={clearAppCache}
+                disabled={Boolean(dataAction)}
+              >
+                {dataAction === 'cache' ? 'Working…' : 'Clear cache'}
+              </button>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Clear all chats</span>
+                <span>Deletes every stored message and read receipt. Keeps contacts and settings.</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={clearChatHistoryOnly}
+                disabled={Boolean(dataAction)}
+              >
+                {dataAction === 'messages' ? 'Working…' : 'Clear chats'}
+              </button>
+            </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Delete all local data</span>
+                <span>Wipes the config file (chats, contacts, settings) and assigns a fresh peer identity. Use only if you want a clean install.</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                onClick={wipeAllAppData}
+                disabled={Boolean(dataAction)}
+              >
+                {dataAction === 'wipe' ? 'Working…' : 'Delete everything'}
+              </button>
             </div>
           </div>
         </section>

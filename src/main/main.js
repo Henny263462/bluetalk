@@ -723,6 +723,59 @@ function createTray() {
   tray.on('double-click', () => showMainWindow());
 }
 
+async function clearRendererSessionCaches() {
+  const targets = [session.defaultSession];
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const s = mainWindow.webContents.session;
+    if (s && !targets.includes(s)) targets.push(s);
+  }
+  for (const s of targets) {
+    try {
+      await s.clearCache();
+    } catch (e) {
+      console.error('clearCache error:', e);
+    }
+    try {
+      await s.clearStorageData();
+    } catch (e) {
+      console.error('clearStorageData error:', e);
+    }
+  }
+}
+
+async function wipeAllLocalAppData() {
+  if (!store || !peerServer || !apiServer) {
+    return { ok: false, error: 'not_ready' };
+  }
+  try {
+    apiServer.stop();
+    peerServer.stop();
+    await store.clearAll();
+    peerServer.reloadIdentityFromStore();
+    await peerServer.start();
+    apiServer.start(store.get('settings.apiPort', 19876));
+    handleSettingsMutation();
+    mainWindow?.webContents?.send('peers:list-sync', []);
+    mainWindow?.webContents?.send('app:data-cleared', { kind: 'all' });
+    return { ok: true };
+  } catch (e) {
+    console.error('wipeAllLocalAppData error:', e);
+    return { ok: false, error: e?.message || 'wipe_failed' };
+  }
+}
+
+async function clearStoredChatMessagesOnly() {
+  if (!store) return { ok: false, error: 'not_ready' };
+  try {
+    store.delete('messages');
+    mainWindow?.webContents?.send('app:data-cleared', { kind: 'messages' });
+    return { ok: true };
+  } catch (e) {
+    console.error('clearStoredChatMessagesOnly error:', e);
+    return { ok: false, error: e?.message || 'clear_messages_failed' };
+  }
+}
+
 function setupIPC() {
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:maximize', () => {
@@ -815,6 +868,20 @@ function setupIPC() {
   ipcMain.handle('updater:check', async () => checkForAppUpdates('manual'));
   ipcMain.handle('updater:download', async () => downloadAppUpdate());
   ipcMain.handle('updater:install', () => installDownloadedUpdate());
+
+  ipcMain.handle('app:clearCache', async () => {
+    try {
+      await clearRendererSessionCaches();
+      return { ok: true };
+    } catch (e) {
+      console.error('app:clearCache error:', e);
+      return { ok: false, error: e?.message || 'clear_cache_failed' };
+    }
+  });
+
+  ipcMain.handle('app:clearMessages', () => clearStoredChatMessagesOnly());
+
+  ipcMain.handle('app:wipeAllData', () => wipeAllLocalAppData());
 
   const forwardEvents = [
     'peer:connected',

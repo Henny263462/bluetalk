@@ -1007,6 +1007,19 @@ class PeerServer extends EventEmitter {
     return peers;
   }
 
+  /**
+   * After the on-disk store was wiped, reload identity from store (or create a new peer id).
+   * Does not start listeners; call start() afterwards.
+   */
+  reloadIdentityFromStore() {
+    this.id = this.store.get('peerId') || this._generateId();
+    if (!this.store.get('peerId')) {
+      this.store.set('peerId', this.id);
+    }
+    this.hostedFiles.clear();
+    this.discoveredPeers.clear();
+  }
+
   stop() {
     if (this._discoveryTimer) {
       clearInterval(this._discoveryTimer);

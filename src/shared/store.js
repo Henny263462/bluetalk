@@ -81,6 +81,26 @@ class Store {
   getAll() {
     return { ...this.data };
   }
+
+  async waitForWrites() {
+    if (this._writePromise) {
+      await this._writePromise;
+    }
+  }
+
+  /** Replace persisted data with an empty object (used for “delete all data”). */
+  async clearAll() {
+    await this.waitForWrites();
+    this.data = {};
+    this._dirty = false;
+    try {
+      await fs.promises.mkdir(path.dirname(this.path), { recursive: true });
+      await fs.promises.writeFile(this.path, '{}', 'utf-8');
+    } catch (e) {
+      console.error('Store clear error:', e);
+      throw e;
+    }
+  }
 }
 
 module.exports = Store;
