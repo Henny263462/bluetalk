@@ -17,6 +17,11 @@ export type ReleasePayload = {
   installer: { url: string; name: string; size: number } | null
   portable: { url: string; name: string; size: number } | null
   error: string | null
+  /**
+   * `tag_name` of GitHub `GET /repos/.../releases/latest` when that release has no Windows .exe yet
+   * (for example CI still uploading assets). Downloads may come from an older release instead.
+   */
+  pendingLatestTag: string | null
 }
 
 const REPO = 'Henny263462/bluetalk'
@@ -56,12 +61,18 @@ export function pickWindowsAssets(assets: GhAsset[]) {
   return { installer, portable }
 }
 
+function ghReleaseHasNoWindowsExe(rel: GhRelease): boolean {
+  const { installer, portable } = pickWindowsAssets(rel.assets || [])
+  return !installer && !portable
+}
+
 function payloadFromRelease(rel: GhRelease | null | undefined): ReleasePayload {
   const fallback: ReleasePayload = {
     tag: null,
     installer: null,
     portable: null,
     error: null,
+    pendingLatestTag: null,
   }
   if (!rel) {
     return { ...fallback, error: 'No release data' }
@@ -76,6 +87,7 @@ function payloadFromRelease(rel: GhRelease | null | undefined): ReleasePayload {
       ? { url: portable.browser_download_url, name: portable.name, size: portable.size }
       : null,
     error: !installer && !portable ? 'No Windows .exe assets on this release' : null,
+    pendingLatestTag: null,
   }
 }
 
@@ -96,6 +108,7 @@ export async function resolveLatestWindowsAssets(): Promise<ReleasePayload> {
     installer: null,
     portable: null,
     error: null,
+    pendingLatestTag: null,
   }
 
   try {
@@ -104,9 +117,14 @@ export async function resolveLatestWindowsAssets(): Promise<ReleasePayload> {
       token,
     )
 
+    const pendingFromLatest =
+      latest.ok && latest.data && ghReleaseHasNoWindowsExe(latest.data)
+        ? (latest.data.tag_name ?? null)
+        : null
+
     if (latest.ok && latest.data) {
       const p = payloadFromRelease(latest.data)
-      if (!p.error) return p
+      if (!p.error) return { ...p, pendingLatestTag: null }
     }
 
     const list = await fetchJson<GhRelease[]>(
@@ -120,6 +138,7 @@ export async function resolveLatestWindowsAssets(): Promise<ReleasePayload> {
         error: latest.ok
           ? 'No Windows .exe assets found'
           : `GitHub returned ${latest.status} for latest, ${list.status} for list`,
+        pendingLatestTag: pendingFromLatest,
       }
     }
 
@@ -136,11 +155,12 @@ export async function resolveLatestWindowsAssets(): Promise<ReleasePayload> {
       .sort((a, b) => b.t - a.t)
 
     const best = scored[0]
-    if (best) return best.p
+    if (best) return { ...best.p, pendingLatestTag: pendingFromLatest }
 
     return {
       ...empty,
       error: 'No published release with Windows .exe assets',
+      pendingLatestTag: pendingFromLatest,
     }
   } catch {
     return { ...empty, error: 'Could not load release info' }
