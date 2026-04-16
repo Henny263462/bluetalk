@@ -1087,6 +1087,18 @@ class PeerServer extends EventEmitter {
     }
   }
 
+  /**
+   * Close every active peer connection, then re-dial saved contacts and refresh LAN discovery.
+   */
+  resetAllConnectionsAndReconnect() {
+    const ids = [...this.peers.keys()];
+    for (const id of ids) {
+      this.disconnectPeer(id);
+    }
+    this.reconnectContactsFromStore();
+    this.refreshDiscovery();
+  }
+
   stop() {
     if (this._discoveryTimer) {
       clearInterval(this._discoveryTimer);

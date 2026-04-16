@@ -26,6 +26,7 @@ import {
   exportAesKeyToB64,
   importAesKeyFromRawB64,
 } from './chatCrypto';
+import { mergeFeatureFlagDefaults, getEffectiveFlag } from './featureFlags';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -47,6 +48,7 @@ const DEFAULT_APP_SETTINGS = {
   debugMode: false,
   windowsNotifications: true,
   sendReadReceipts: true,
+  featureFlags: mergeFeatureFlagDefaults(),
 };
 
 function newChatMessageId() {
@@ -69,6 +71,17 @@ async function persistE2eeSessionsMap(sessionsRef) {
     }
   }
   window.bluetalk.store.set('e2eeSessions', out);
+}
+
+/**
+ * Ausgehende E2EE nur wenn Feature-Flag `e2eeEncryption` an ist und der Kontakt nicht `e2eeEnabled: false` gesetzt hat.
+ */
+function contactWantsOutgoingE2ee(settingsRef, contactsRef, peerId) {
+  if (!getEffectiveFlag(settingsRef.current, 'e2eeEncryption')) return false;
+  if (!peerId) return true;
+  const c = contactsRef.current.find((x) => x?.id === peerId);
+  if (c?.e2eeEnabled === false) return false;
+  return true;
 }
 
 function TitleBar() {
@@ -173,6 +186,8 @@ export default function App() {
   const ownEcdhPublicSpkiRef = useRef('');
   const e2eeSessionsRef = useRef({});
   const [peerReadReceipts, setPeerReadReceipts] = useState({});
+  /** Höchster Zeitstempel einer Peer-Nachricht, die der Nutzer im Chat „gesehen“ hat (lokale UI, nicht E2EE-Read-Receipt). */
+  const [chatLastViewedPeerTs, setChatLastViewedPeerTs] = useState({});
   const [loadError, setLoadError] = useState('');
   const [showVersionWelcome, setShowVersionWelcome] = useState(false);
   const [e2eeBootNonce, setE2eeBootNonce] = useState(0);
@@ -232,6 +247,7 @@ export default function App() {
             const peerList = await window.bluetalk.peer.getPeers();
             for (const p of peerList || []) {
               if (!p?.id) continue;
+              if (!contactWantsOutgoingE2ee(settingsRef, contactsRef, p.id)) continue;
               if (contactsRef.current.some((c) => c?.id === p.id && c.blocked === true)) continue;
               void window.bluetalk.peer.send(p.id, {
                 kind: 'e2ee-key-handshake',
@@ -342,7 +358,7 @@ export default function App() {
         });
 
         const blocked = contactsRef.current.some((c) => c?.id === peer.id && c.blocked === true);
-        if (!blocked && ownEcdhPublicSpkiRef.current) {
+        if (!blocked && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(settingsRef, contactsRef, peer.id)) {
           void window.bluetalk.peer.send(peer.id, {
             kind: 'e2ee-key-handshake',
             publicSpkiB64: ownEcdhPublicSpkiRef.current,
@@ -524,10 +540,32 @@ export default function App() {
 
         setContacts(normalized);
         setChatMeta(meta);
+
+        const storedViewed = await window.bluetalk.store.get('chatLastViewedPeerTs', {});
+        const viewedRaw = storedViewed && typeof storedViewed === 'object' ? storedViewed : {};
+        const viewed = {};
+        for (const [k, v] of Object.entries(viewedRaw)) {
+          if (typeof v === 'number' && !Number.isNaN(v)) viewed[k] = v;
+        }
+        let viewedDirty = false;
+        for (const [peerId, row] of Object.entries(meta || {})) {
+          if (peerId === 'self') continue;
+          if (viewed[peerId] != null) continue;
+          const lm = row?.lastMessage;
+          if (!lm || typeof lm.timestamp !== 'number') continue;
+          if (lm.from === 'self') {
+            viewed[peerId] = lm.timestamp;
+            viewedDirty = true;
+          }
+        }
+        if (viewedDirty) window.bluetalk.store.set('chatLastViewedPeerTs', viewed);
+        setChatLastViewedPeerTs(viewed);
+
         setPeerReadReceipts(storedReadReceipts && typeof storedReadReceipts === 'object' ? storedReadReceipts : {});
 
         const stored = storedSettings && typeof storedSettings === 'object' ? storedSettings : {};
         let mergedSettings = { ...DEFAULT_APP_SETTINGS, ...stored };
+        mergedSettings.featureFlags = mergeFeatureFlagDefaults(stored.featureFlags);
         const displayNameTrim = (mergedSettings.displayName || '').trim();
         if (mergedSettings.onboardingUsernameDone !== true && displayNameTrim && displayNameTrim !== 'Anonymous') {
           mergedSettings = { ...mergedSettings, onboardingUsernameDone: true };
@@ -566,6 +604,7 @@ export default function App() {
         setMessages({});
         setLoadedChats({});
         setPeerReadReceipts({});
+        setChatLastViewedPeerTs({});
         setPeers([]);
         setSettings({ ...DEFAULT_APP_SETTINGS });
         setTheme('dark');
@@ -585,6 +624,8 @@ export default function App() {
         setMessages({});
         setLoadedChats({});
         setPeerReadReceipts({});
+        setChatLastViewedPeerTs({});
+        if (window.bluetalk) window.bluetalk.store.set('chatLastViewedPeerTs', {});
         window.location.hash = '#/';
       }
     });
@@ -638,63 +679,109 @@ export default function App() {
       ? { kind: 'chat', content: payload }
       : { kind: 'chat', ...payload };
 
+    const localPreviewUrl = outgoing.kind === 'file' ? outgoing.localPreviewUrl : undefined;
+    const fileDataB64 = outgoing.kind === 'file' ? outgoing.fileData : undefined;
+
+    const payloadForCrypto = { ...outgoing };
+    delete payloadForCrypto.localPreviewUrl;
+
     const messageId = newChatMessageId();
     const createdAt = Date.now();
 
     const innerPlain = {
-      ...outgoing,
+      ...payloadForCrypto,
       sender: settings.displayName,
       messageId,
       timestamp: createdAt,
     };
 
-    const selfMessage = {
+    const selfMessageLight =
+      innerPlain.kind === 'file'
+        ? {
+            ...innerPlain,
+            fileData: undefined,
+            localPreviewUrl,
+            from: 'self',
+            deliveryStatus: 'pending',
+          }
+        : {
+            ...innerPlain,
+            from: 'self',
+            deliveryStatus: 'pending',
+          };
+
+    const selfMessageFull = {
       ...innerPlain,
       from: 'self',
       deliveryStatus: 'pending',
     };
 
-    setMessages((prev) => ({
-      ...prev,
-      [peerId]: [...(prev[peerId] || []), selfMessage],
-    }));
+    const flushOptimistic = () => {
+      setMessages((prev) => ({
+        ...prev,
+        [peerId]: [...(prev[peerId] || []), selfMessageLight],
+      }));
 
-    setChatMeta((prev) => ({
-      ...prev,
-      [peerId]: {
-        count: (prev[peerId]?.count || 0) + 1,
-        lastMessage: selfMessage,
-      },
-    }));
+      setChatMeta((prev) => ({
+        ...prev,
+        [peerId]: {
+          count: (prev[peerId]?.count || 0) + 1,
+          lastMessage: selfMessageLight,
+        },
+      }));
 
-    upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
+      upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
+    };
+
+    if (getEffectiveFlag(settingsRef.current, 'smoothChatSend')) {
+      startTransition(flushOptimistic);
+    } else {
+      flushOptimistic();
+    }
 
     const sendPromise = (async () => {
-      let session = e2eeSessionsRef.current[peerId];
-      if (!session?.aesKey && ownEcdhPublicSpkiRef.current) {
-        void window.bluetalk.peer.send(peerId, {
-          kind: 'e2ee-key-handshake',
-          publicSpkiB64: ownEcdhPublicSpkiRef.current,
-          sender: settingsRef.current.displayName,
-        });
-        const deadline = Date.now() + 8000;
-        while (Date.now() < deadline) {
-          await new Promise((r) => {
-            setTimeout(r, 120);
-          });
-          session = e2eeSessionsRef.current[peerId];
-          if (session?.aesKey) break;
+      const revokePreview = () => {
+        if (localPreviewUrl) {
+          try {
+            URL.revokeObjectURL(localPreviewUrl);
+          } catch {
+            /* ignore */
+          }
         }
-      }
+      };
+
+      const failScheduled = () => {
+        revokePreview();
+        void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled', localPreviewUrl: undefined });
+      };
 
       let wirePayload = innerPlain;
-      if (session?.aesKey && (innerPlain.kind === 'chat' || innerPlain.kind === 'file')) {
-        try {
-          wirePayload = await encryptChatPayload(session.aesKey, innerPlain);
-        } catch (e) {
-          console.error('E2EE encrypt failed:', e);
-          void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
-          return false;
+      if (contactWantsOutgoingE2ee(settingsRef, contactsRef, peerId)) {
+        let session = e2eeSessionsRef.current[peerId];
+        if (!session?.aesKey && ownEcdhPublicSpkiRef.current) {
+          void window.bluetalk.peer.send(peerId, {
+            kind: 'e2ee-key-handshake',
+            publicSpkiB64: ownEcdhPublicSpkiRef.current,
+            sender: settingsRef.current.displayName,
+          });
+          const deadline = Date.now() + 8000;
+          while (Date.now() < deadline) {
+            await new Promise((r) => {
+              setTimeout(r, 120);
+            });
+            session = e2eeSessionsRef.current[peerId];
+            if (session?.aesKey) break;
+          }
+        }
+
+        if (session?.aesKey && (innerPlain.kind === 'chat' || innerPlain.kind === 'file')) {
+          try {
+            wirePayload = await encryptChatPayload(session.aesKey, innerPlain);
+          } catch (e) {
+            console.error('E2EE encrypt failed:', e);
+            failScheduled();
+            return false;
+          }
         }
       }
 
@@ -705,15 +792,36 @@ export default function App() {
         timestamp: createdAt,
       };
 
-      try {
-        const [sent, meta] = await Promise.all([
-          window.bluetalk.peer.send(peerId, wire),
-          window.bluetalk.messages.append(peerId, selfMessage),
-        ]);
+      const isFile = innerPlain.kind === 'file';
+      const deferDisk = isFile && getEffectiveFlag(settingsRef.current, 'deferFileDiskAfterSend');
 
-        if (!sent) {
-          void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
-          return false;
+      try {
+        let sent;
+        let meta;
+
+        if (isFile && deferDisk) {
+          sent = await window.bluetalk.peer.send(peerId, wire);
+          if (!sent) {
+            failScheduled();
+            return false;
+          }
+          meta = await window.bluetalk.messages.append(peerId, selfMessageFull);
+        } else {
+          const pair = await Promise.all([
+            window.bluetalk.peer.send(peerId, wire),
+            window.bluetalk.messages.append(peerId, selfMessageFull),
+          ]);
+          sent = pair[0];
+          meta = pair[1];
+          if (!sent) {
+            failScheduled();
+            return false;
+          }
+        }
+
+        if (isFile && fileDataB64) {
+          await applyMessagePatch(peerId, messageId, { fileData: fileDataB64, localPreviewUrl: undefined });
+          revokePreview();
         }
 
         if (meta?.count) {
@@ -728,13 +836,24 @@ export default function App() {
 
         return true;
       } catch {
-        void applyMessagePatch(peerId, messageId, { deliveryStatus: 'scheduled' });
+        failScheduled();
         return false;
       }
     })();
 
     return sendPromise;
   }, [settings.displayName, upsertContact, applyMessagePatch]);
+
+  const markPeerChatViewed = useCallback((peerId, upToPeerMessageTimestamp) => {
+    if (!peerId || typeof upToPeerMessageTimestamp !== 'number' || upToPeerMessageTimestamp <= 0) return;
+    setChatLastViewedPeerTs((prev) => {
+      const cur = typeof prev[peerId] === 'number' ? prev[peerId] : 0;
+      if (upToPeerMessageTimestamp <= cur) return prev;
+      const next = { ...prev, [peerId]: upToPeerMessageTimestamp };
+      if (window.bluetalk) window.bluetalk.store.set('chatLastViewedPeerTs', next);
+      return next;
+    });
+  }, []);
 
   const sendReadReceipt = useCallback(async (peerId, lastReadMessageId) => {
     if (!window.bluetalk || !peerId || !lastReadMessageId) return;
@@ -791,6 +910,11 @@ export default function App() {
     upsertContact({ id: contactId, pinned: Boolean(pinned) });
   }, [upsertContact]);
 
+  const setContactE2eeEnabled = useCallback((contactId, enabled) => {
+    if (!contactId) return;
+    upsertContact({ id: contactId, e2eeEnabled: Boolean(enabled) });
+  }, [upsertContact]);
+
   const setContactBlocked = useCallback((contactId, blocked) => {
     if (!contactId) return;
     upsertContact({ id: contactId, blocked: Boolean(blocked) });
@@ -799,7 +923,7 @@ export default function App() {
       delete next[contactId];
       e2eeSessionsRef.current = next;
       void persistE2eeSessionsMap(e2eeSessionsRef);
-    } else if (window.bluetalk && ownEcdhPublicSpkiRef.current) {
+    } else if (window.bluetalk && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(settingsRef, contactsRef, contactId)) {
       void window.bluetalk.peer.send(contactId, {
         kind: 'e2ee-key-handshake',
         publicSpkiB64: ownEcdhPublicSpkiRef.current,
@@ -854,6 +978,12 @@ export default function App() {
       if (window.bluetalk) window.bluetalk.store.set('chatReadReceipts', next);
       return next;
     });
+    setChatLastViewedPeerTs((prev) => {
+      const next = { ...prev };
+      delete next[peerId];
+      if (window.bluetalk) window.bluetalk.store.set('chatLastViewedPeerTs', next);
+      return next;
+    });
     setMessages((prev) => {
       const updated = { ...prev };
       delete updated[peerId];
@@ -876,6 +1006,12 @@ export default function App() {
   const updateSettings = useCallback((newSettings) => {
     setSettings((prev) => {
       const merged = { ...prev, ...newSettings };
+      if (newSettings.featureFlags && typeof newSettings.featureFlags === 'object') {
+        merged.featureFlags = {
+          ...(prev.featureFlags || {}),
+          ...newSettings.featureFlags,
+        };
+      }
       if (window.bluetalk) {
         window.bluetalk.store.set('settings', merged);
         const profileKeys = ['displayName', 'bio', 'profilePicture'];
@@ -910,6 +1046,8 @@ export default function App() {
     theme,
     peerCount: peers.length,
     peerReadReceipts,
+    chatLastViewedPeerTs,
+    markPeerChatViewed,
     sendMessage,
     sendReadReceipt,
     loadChatMessages,
@@ -917,6 +1055,7 @@ export default function App() {
     refreshDiscovery,
     setContactNickname,
     setChatPinned,
+    setContactE2eeEnabled,
     deleteMessage,
     deleteChat,
     removeContact,
@@ -930,7 +1069,7 @@ export default function App() {
   if (!window.bluetalk) {
     return (
       <AppContext.Provider value={ctx}>
-        <ToastProvider>
+        <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
           <RuntimeUnavailablePage />
         </ToastProvider>
       </AppContext.Provider>
@@ -939,7 +1078,7 @@ export default function App() {
 
   return (
     <AppContext.Provider value={ctx}>
-      <ToastProvider>
+      <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
         <ErrorBoundary>
           <HashRouter>
             <div className="app">

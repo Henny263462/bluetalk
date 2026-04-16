@@ -997,6 +997,11 @@ function setupIPC() {
     return { ok: true };
   });
 
+  ipcMain.handle('peer:resetAllConnections', () => {
+    peerServer?.resetAllConnectionsAndReconnect();
+    return { ok: true };
+  });
+
   ipcMain.handle('updater:getState', () => patchUpdateState());
   ipcMain.handle('updater:check', async () => checkForAppUpdates('manual'));
   ipcMain.handle('updater:download', async () => downloadAppUpdate());

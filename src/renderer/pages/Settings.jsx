@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../App';
 import { useToast } from '../components/ToastProvider';
 import { APP_VERSION } from '../appVersion';
+import FeatureFlagsModal from '../components/FeatureFlagsModal';
 import {
   ArrowUpCircle,
   Bell,
@@ -24,6 +25,7 @@ import {
   Sun,
   TestTube2,
   Trash2,
+  Unplug,
   User,
 } from 'lucide-react';
 
@@ -93,9 +95,11 @@ export default function SettingsPage() {
   const [configPath, setConfigPath] = useState('');
   const [configLoading, setConfigLoading] = useState(false);
   const [redialing, setRedialing] = useState(false);
+  const [resettingConnections, setResettingConnections] = useState(false);
   const [updaterState, setUpdaterState] = useState(null);
   const [updateAction, setUpdateAction] = useState('');
   const [dataAction, setDataAction] = useState('');
+  const [featureFlagsOpen, setFeatureFlagsOpen] = useState(false);
 
   useEffect(() => {
     setLocal(settings);
@@ -279,7 +283,7 @@ export default function SettingsPage() {
   };
 
   const redialSavedContacts = async () => {
-    if (!window.bluetalk?.peer?.reconnectContacts || redialing) return;
+    if (!window.bluetalk?.peer?.reconnectContacts || redialing || resettingConnections) return;
     setRedialing(true);
     try {
       await window.bluetalk.peer.reconnectContacts();
@@ -293,6 +297,27 @@ export default function SettingsPage() {
       toast({ variant: 'error', title: 'Reconnect failed', message: e?.message || 'Unknown error' });
     } finally {
       setRedialing(false);
+    }
+  };
+
+  const resetAllConnectionsAndReconnect = async () => {
+    if (!window.bluetalk?.peer?.resetAllConnections || resettingConnections || redialing) return;
+    setResettingConnections(true);
+    try {
+      await window.bluetalk.peer.resetAllConnections();
+      toast({
+        variant: 'success',
+        title: 'Connections reset',
+        message: 'All peer connections were closed; reconnecting to contacts and discovery in the background.',
+      });
+    } catch (e) {
+      toast({
+        variant: 'error',
+        title: 'Reset failed',
+        message: e?.message || 'Unknown error',
+      });
+    } finally {
+      setResettingConnections(false);
     }
   };
 
@@ -450,15 +475,33 @@ export default function SettingsPage() {
               <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
                 Retry outbound connections to every saved contact address and refresh LAN discovery. Use this after a network change or if peers show as offline.
               </p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={redialSavedContacts}
-                disabled={redialing || !window.bluetalk?.peer?.reconnectContacts}
-              >
-                <RefreshCw size={15} strokeWidth={ICON_STROKE} />
-                {redialing ? 'Reconnecting…' : 'Reconnect'}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={resetAllConnectionsAndReconnect}
+                  disabled={
+                    resettingConnections ||
+                    redialing ||
+                    !window.bluetalk?.peer?.resetAllConnections
+                  }
+                >
+                  <Unplug size={15} strokeWidth={ICON_STROKE} />
+                  {resettingConnections ? 'Resetting…' : 'Reset all & reconnect'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={redialSavedContacts}
+                  disabled={redialing || resettingConnections || !window.bluetalk?.peer?.reconnectContacts}
+                >
+                  <RefreshCw size={15} strokeWidth={ICON_STROKE} />
+                  {redialing ? 'Reconnecting…' : 'Reconnect'}
+                </button>
+              </div>
+              <p className="text-sm text-muted" style={{ margin: '8px 0 0' }}>
+                Reset all closes every active chat connection first, then runs the same reconnect and discovery refresh as above. Use when chats are stuck or state looks inconsistent.
+              </p>
             </div>
             <div className="flex items-center gap-2" style={{ fontSize: 13 }}>
               <span className="text-muted">Currently connected:</span>
@@ -967,9 +1010,30 @@ export default function SettingsPage() {
                 <span className="toggle-slider" />
               </label>
             </div>
+
+            <div className="toggle-row">
+              <div className="toggle-row-info">
+                <span>Feature flags</span>
+                <span>Experimental performance and behavior toggles (search, detail view, descriptions).</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => setFeatureFlagsOpen(true)}
+              >
+                Configure feature flags
+              </button>
+            </div>
           </div>
         </section>
       </div>
+
+      <FeatureFlagsModal
+        open={featureFlagsOpen}
+        onClose={() => setFeatureFlagsOpen(false)}
+        settings={local}
+        updateSettings={updateSettings}
+      />
     </div>
   );
 }

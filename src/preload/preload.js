@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
     connect: (address) => ipcRenderer.invoke('peer:connect', address),
     normalizeAddress: (raw) => ipcRenderer.invoke('peer:normalizeAddress', raw),
     reconnectContacts: () => ipcRenderer.invoke('peer:reconnectContacts'),
+    resetAllConnections: () => ipcRenderer.invoke('peer:resetAllConnections'),
     disconnect: (peerId) => ipcRenderer.invoke('peer:disconnect', peerId),
     send: (peerId, data) => ipcRenderer.invoke('peer:send', peerId, data),
     broadcast: (data) => ipcRenderer.invoke('peer:broadcast', data),

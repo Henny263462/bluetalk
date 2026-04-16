@@ -3,12 +3,17 @@ import { AlertCircle, CheckCircle, Info, X, XCircle } from 'lucide-react';
 
 const ToastContext = createContext(null);
 
+/** Abstand & Stufe für Apple-ähnlichen Kartenstapel (unten rechts). */
+const SOLID_BR_STACK_OFFSET_PX = 11;
+const SOLID_BR_STACK_SCALE = 0.028;
+const SOLID_BR_STACK_MIN_SCALE = 0.9;
+
 function toastId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   return `toast-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function ToastProvider({ children }) {
+export function ToastProvider({ children, solidBottomRight = false }) {
   const [toasts, setToasts] = useState([]);
 
   const dismissToast = useCallback((id) => {
@@ -38,11 +43,19 @@ export function ToastProvider({ children }) {
 
   const value = useMemo(() => ({ toast, dismissToast }), [toast, dismissToast]);
 
+  const solidBrStackPad =
+    solidBottomRight && toasts.length > 1 ? (toasts.length - 1) * SOLID_BR_STACK_OFFSET_PX : 0;
+
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-stack" aria-live="polite" aria-relevant="additions text">
-        {toasts.map((t) => {
+      <div
+        className={`toast-stack${solidBottomRight ? ' toast-stack--solid-br' : ''}`}
+        aria-live="polite"
+        aria-relevant="additions text"
+        style={solidBottomRight ? { paddingTop: solidBrStackPad } : undefined}
+      >
+        {toasts.map((t, i) => {
           const Icon =
             t.variant === 'success'
               ? CheckCircle
@@ -51,8 +64,24 @@ export function ToastProvider({ children }) {
                 : t.variant === 'warning'
                   ? AlertCircle
                   : Info;
+          const depth = solidBottomRight ? toasts.length - 1 - i : 0;
+          const scale = solidBottomRight
+            ? Math.max(SOLID_BR_STACK_MIN_SCALE, 1 - depth * SOLID_BR_STACK_SCALE)
+            : 1;
+          const stackStyle = solidBottomRight
+            ? {
+                zIndex: 10 + i,
+                transform: `translateY(${-depth * SOLID_BR_STACK_OFFSET_PX}px) scale(${scale})`,
+                pointerEvents: i === toasts.length - 1 ? 'auto' : 'none',
+              }
+            : undefined;
           return (
-            <div key={t.id} className={`toast toast--${t.variant}`} role="status">
+            <div
+              key={t.id}
+              className={`toast toast--${t.variant}`}
+              role="status"
+              style={stackStyle}
+            >
               <Icon className="toast-icon" size={18} strokeWidth={2} aria-hidden />
               <div className="toast-body">
                 {t.title ? <div className="toast-title">{t.title}</div> : null}

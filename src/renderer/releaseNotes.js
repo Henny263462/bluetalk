@@ -3,6 +3,13 @@
  * When you ship a new version, add a matching key here (same as package.json version).
  */
 const RELEASE_NOTES = {
+  '1.1.3': {
+    title: "What's new in BlueTalk 1.1.3",
+    items: [
+      'Settings: Feature flags panel for optional performance and UI tweaks (smoother sends, faster large file reads, deferred attachment saves, unread list badges, solid corner toasts).',
+      'Global toggle for outgoing end-to-end encryption in feature flags; per-chat lock control still applies when encryption is enabled.',
+    ],
+  },
   '1.1.2': {
     title: "What's new in BlueTalk 1.1.2",
     items: [

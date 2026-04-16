@@ -6,6 +6,8 @@ import {
   Archive,
   Ban,
   Copy,
+  Lock,
+  Unlock,
   File,
   FileCode,
   FileImage,
@@ -28,6 +30,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../App';
 import { useToast } from '../components/ToastProvider';
+import { getEffectiveFlag } from '../featureFlags';
 
 const CHAT_ICON_STROKE = 1.75;
 
@@ -105,10 +108,82 @@ function getLastPreview(message) {
   return (message.from === 'self' ? 'You: ' : '') + (message.content || 'Message');
 }
 
+function formatUnreadBadgeCount(n) {
+  if (n <= 0) return '';
+  if (n >= 10) return '9+';
+  return String(n);
+}
+
+function peerProfileAddress(chat) {
+  const saved = chat.contact?.address;
+  if (saved) return saved;
+  const p = chat.peer;
+  if (p?.address != null && p?.port != null) return `${p.address}:${p.port}`;
+  if (typeof p?.address === 'string') return p.address;
+  return '';
+}
+
+function countUnreadPeerMessages(peerId, lastViewedTs, messagesByPeer, lastMessageMeta) {
+  const bound = typeof lastViewedTs === 'number' ? lastViewedTs : 0;
+  const arr = messagesByPeer[peerId] || [];
+  let n = 0;
+  for (const m of arr) {
+    if (m.from !== 'self' && typeof m.timestamp === 'number' && m.timestamp > bound) n += 1;
+  }
+  if (
+    n === 0
+    && arr.length === 0
+    && lastMessageMeta
+    && lastMessageMeta.from !== 'self'
+    && typeof lastMessageMeta.timestamp === 'number'
+    && lastMessageMeta.timestamp > bound
+  ) {
+    n = 1;
+  }
+  return n;
+}
+
+/** Gespeicherte Präferenz pro Kontakt (nur wirksam, wenn das Feature-Flag „e2eeEncryption“ an ist). */
+function contactE2eePreferenceOn(contact) {
+  return contact?.e2eeEnabled !== false;
+}
+
 /**
- * Reads file as base64 with progress (0–1). Uses ArrayBuffer so onprogress works for larger files.
+ * Reads file as base64 with progress (0–1). Optional fast path uses readAsDataURL (often faster on large files).
  */
-function readFileAsBase64WithProgress(file, onProgress) {
+function readFileAsBase64WithProgress(file, onProgress, useFastDataUrl) {
+  if (useFastDataUrl) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onprogress = (e) => {
+        if (e.lengthComputable && typeof onProgress === 'function' && e.total > 0) {
+          onProgress(Math.min(1, e.loaded / e.total));
+        }
+      };
+      reader.onload = () => {
+        try {
+          const result = reader.result;
+          if (typeof result !== 'string') {
+            reject(new Error('Invalid read result'));
+            return;
+          }
+          const comma = result.indexOf(',');
+          if (comma < 0) {
+            reject(new Error('Invalid data URL'));
+            return;
+          }
+          const base64 = result.slice(comma + 1);
+          onProgress?.(1);
+          resolve({ dataUrl: result, base64 });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = () => reject(reader.error || new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onprogress = (e) => {
@@ -169,7 +244,9 @@ function imageMimeForFile(mime, fileName) {
 }
 
 function getFileBlobUrl(message) {
-  if (!message || message.kind !== 'file' || !message.fileData) return '';
+  if (!message || message.kind !== 'file') return '';
+  if (message.localPreviewUrl) return message.localPreviewUrl;
+  if (!message.fileData) return '';
   const mime = message.fileType || 'application/octet-stream';
   const category = getFileCategory(mime, message.fileName);
   const type =
@@ -182,9 +259,10 @@ function getImageUrl(message) {
 
   if (message.kind === 'file') {
     const mime = message.fileType || 'application/octet-stream';
-    if (!message.fileData) return '';
     const category = getFileCategory(mime, message.fileName);
     if (category !== 'image') return '';
+    if (message.localPreviewUrl) return message.localPreviewUrl;
+    if (!message.fileData) return '';
     const imageMime = imageMimeForFile(mime, message.fileName);
     if (!imageMime) return '';
     return `data:${imageMime};base64,${message.fileData}`;
@@ -277,7 +355,7 @@ function FileMessage({ message, bareLayout = false, onExpandImage, onSaveToDisk 
   const mime = message.fileType || 'application/octet-stream';
   const category = getFileCategory(mime, message.fileName);
   const imageUrl = category === 'image' ? getImageUrl(message) : '';
-  const hasPayload = Boolean(message.fileData && dataUrl);
+  const hasPayload = Boolean(dataUrl && (message.fileData || message.localPreviewUrl));
   const showImagePreview = category === 'image' && !!imageUrl;
   const showIconRow =
     category === 'other' || (category === 'image' && !imageUrl) || ((category === 'video' || category === 'audio') && !hasPayload);
@@ -496,12 +574,15 @@ export default function ChatsPage() {
     messages,
     settings,
     peerReadReceipts,
+    chatLastViewedPeerTs,
+    markPeerChatViewed,
     sendMessage,
     sendReadReceipt,
     loadChatMessages,
     connectToAddress,
     setContactNickname,
     setChatPinned,
+    setContactE2eeEnabled,
     setContactBlocked,
     deleteChat,
     deleteMessage,
@@ -532,6 +613,36 @@ export default function ChatsPage() {
   /** null | { stage: 'reading' | 'sending', percent: number, detail: string } */
   const [fileTransfer, setFileTransfer] = useState(null);
   const [mediaLightbox, setMediaLightbox] = useState(null);
+  const [showPeerProfile, setShowPeerProfile] = useState(false);
+
+  const pendingFileRef = useRef(null);
+  useEffect(() => {
+    pendingFileRef.current = pendingFile;
+  }, [pendingFile]);
+
+  useEffect(() => () => {
+    const p = pendingFileRef.current;
+    if (p?.objectUrl) {
+      try {
+        URL.revokeObjectURL(p.objectUrl);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const clearPendingFile = useCallback(() => {
+    setPendingFile((prev) => {
+      if (prev?.objectUrl) {
+        try {
+          URL.revokeObjectURL(prev.objectUrl);
+        } catch {
+          /* ignore */
+        }
+      }
+      return null;
+    });
+  }, []);
 
   const endRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -569,6 +680,8 @@ export default function ChatsPage() {
         bio,
         offline: !peer,
         pinned: Boolean(contact?.pinned),
+        e2eePlaintextBadge:
+          getEffectiveFlag(settings, 'e2eeEncryption') && contact?.e2eeEnabled === false,
         lastMessage: meta?.lastMessage || null,
         messageCount: meta?.count || 0,
       });
@@ -580,7 +693,7 @@ export default function ChatsPage() {
       const bTs = b.lastMessage?.timestamp || b.contact?.addedAt || 0;
       return bTs - aTs;
     });
-  }, [chatMeta, contacts, peers]);
+  }, [chatMeta, contacts, peers, settings]);
 
   const mainChatList = useMemo(
     () =>
@@ -630,11 +743,59 @@ export default function ChatsPage() {
   const hasMoreMessages = selectedPeer ? selectedPeer.messageCount > msgs.length : false;
   const newestTimestamp = msgs[msgs.length - 1]?.timestamp || 0;
 
+  const chatOfflineReconnectOverlayOn = getEffectiveFlag(settings, 'chatOfflineReconnectOverlay');
+  const showOfflineComposerReconnect = Boolean(
+    selectedPeer &&
+      !selectedPeer.peer &&
+      !selectedPeer.contact?.blocked &&
+      chatOfflineReconnectOverlayOn
+  );
+  const offlineReconnectAddress = useMemo(() => {
+    if (!selectedPeer || selectedPeer.peer) return '';
+    return (peerProfileAddress(selectedPeer) || '').trim();
+  }, [selectedPeer]);
+
+  useEffect(() => {
+    if (!showOfflineComposerReconnect || !offlineReconnectAddress) return undefined;
+    let cancelled = false;
+    let busy = false;
+    const attempt = async () => {
+      if (cancelled || busy) return;
+      busy = true;
+      try {
+        await connectToAddress(offlineReconnectAddress);
+      } catch {
+        /* Peer weiter offline — kein Toast */
+      } finally {
+        busy = false;
+      }
+    };
+    void attempt();
+    const id = setInterval(attempt, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [showOfflineComposerReconnect, offlineReconnectAddress, connectToAddress]);
+
   useEffect(() => {
     if (selectedPeerId && !chatList.find((chat) => chat.id === selectedPeerId)) {
       setSelectedPeerId(null);
     }
   }, [chatList, selectedPeerId]);
+
+  useEffect(() => {
+    setShowPeerProfile(false);
+  }, [selectedPeerId]);
+
+  useEffect(() => {
+    if (!showPeerProfile) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setShowPeerProfile(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showPeerProfile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -669,6 +830,16 @@ export default function ChatsPage() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [newestTimestamp, selectedPeerId]);
+
+  useEffect(() => {
+    if (!selectedPeerId) return;
+    const peerMsgs = messages[selectedPeerId] || [];
+    const upTo = peerMsgs.reduce((acc, m) => {
+      if (m.from !== 'self' && typeof m.timestamp === 'number') return Math.max(acc, m.timestamp);
+      return acc;
+    }, 0);
+    if (upTo > 0) markPeerChatViewed(selectedPeerId, upTo);
+  }, [selectedPeerId, messages, markPeerChatViewed]);
 
   useEffect(() => {
     if (!selectedPeerId || !settings.sendReadReceipts) return;
@@ -792,6 +963,7 @@ export default function ChatsPage() {
   const send = () => {
     if (!selectedPeer) return;
     if (selectedPeer.contact?.blocked) return;
+    if (showOfflineComposerReconnect) return;
     if (!input.trim() && !pendingFile) return;
     if (sendingFile) return;
 
@@ -830,6 +1002,7 @@ export default function ChatsPage() {
         fileSize: file.size,
         fileType: file.type,
         fileData: file.base64,
+        localPreviewUrl: file.objectUrl,
       }).then((ok) => {
         if (progressTimer) clearInterval(progressTimer);
         if (!ok) {
@@ -874,24 +1047,44 @@ export default function ChatsPage() {
       return;
     }
 
+    const objectUrl = URL.createObjectURL(file);
     setFileTransfer({ stage: 'reading', percent: 0, detail: 'Reading file…' });
     setWarning('');
     try {
-      const data = await readFileAsBase64WithProgress(file, (p) => {
-        setFileTransfer({
-          stage: 'reading',
-          percent: Math.min(100, Math.round(p * 100)),
-          detail: 'Reading file…',
-        });
-      });
-      setPendingFile({
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/octet-stream',
-        base64: data.base64,
-        dataUrl: data.dataUrl,
+      const useFast = getEffectiveFlag(settings, 'fastFileRead');
+      const data = await readFileAsBase64WithProgress(
+        file,
+        (p) => {
+          setFileTransfer({
+            stage: 'reading',
+            percent: Math.min(100, Math.round(p * 100)),
+            detail: 'Reading file…',
+          });
+        },
+        useFast
+      );
+      setPendingFile((prev) => {
+        if (prev?.objectUrl) {
+          try {
+            URL.revokeObjectURL(prev.objectUrl);
+          } catch {
+            /* ignore */
+          }
+        }
+        return {
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          objectUrl,
+          base64: data.base64,
+        };
       });
     } catch {
+      try {
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        /* ignore */
+      }
       const msg = 'Could not read file.';
       setWarning(msg);
       toast({ variant: 'error', title: 'File error', message: msg });
@@ -998,6 +1191,18 @@ export default function ChatsPage() {
     closeListContextMenu();
   };
 
+  const copyToClipboard = async (text, successTitle) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ variant: 'success', title: successTitle });
+    } catch {
+      toast({ variant: 'error', title: 'Kopieren fehlgeschlagen' });
+    }
+  };
+
+  const showUnreadListBadges = getEffectiveFlag(settings, 'chatUnreadListBadges');
+  const e2eeFeatureFlagOn = getEffectiveFlag(settings, 'e2eeEncryption');
+
   return (
     <div className="page">
       <MediaLightbox
@@ -1033,10 +1238,19 @@ export default function ChatsPage() {
                 <p>No chats yet. Use New in the sidebar for peers without a conversation, or connect below.</p>
               </div>
             )}
-            {filtered.map((chat) => (
+            {filtered.map((chat) => {
+              const unreadCount = showUnreadListBadges
+                ? countUnreadPeerMessages(
+                    chat.id,
+                    chatLastViewedPeerTs[chat.id],
+                    messages,
+                    chat.lastMessage
+                  )
+                : 0;
+              return (
               <div
                 key={chat.id}
-                  className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}${chat.contact?.blocked ? ' list-item--blocked' : ''}`}
+                  className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}${chat.contact?.blocked ? ' list-item--blocked' : ''}${showUnreadListBadges && unreadCount > 0 ? ' list-item--has-unread' : ''}`}
                 onClick={() => setSelectedPeerId(chat.id)}
                 onContextMenu={(e) => openChatListContextMenu(e, chat)}
               >
@@ -1049,15 +1263,35 @@ export default function ChatsPage() {
                         <Pin size={12} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                       </span>
                     )}
+                    {chat.e2eePlaintextBadge && (
+                      <span className="chat-pin-badge" title="Ausgehend ohne E2EE (Klartext)">
+                        <Unlock size={12} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                      </span>
+                    )}
                   </div>
                   <div className="list-item-sub">{getLastPreview(chat.lastMessage)}</div>
                 </div>
                 <div className="chat-list-meta">
                   {chat.lastMessage && <span className="list-item-meta">{formatTime(chat.lastMessage.timestamp)}</span>}
-                  <span className={chat.offline ? 'offline-dot' : 'online-dot'} />
+                  <div className="chat-list-meta-row">
+                    {showUnreadListBadges && unreadCount > 0 && (
+                      <>
+                        <span className="chat-unread-dot" title="Ungelesene Nachrichten" aria-hidden />
+                        <span
+                          className="chat-unread-badge"
+                          title={`${unreadCount} ungelesen`}
+                          aria-label={`${unreadCount} ungelesene Nachrichten`}
+                        >
+                          {formatUnreadBadgeCount(unreadCount)}
+                        </span>
+                      </>
+                    )}
+                    <span className={chat.offline ? 'offline-dot' : 'online-dot'} />
+                  </div>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         </div>
 
@@ -1074,7 +1308,14 @@ export default function ChatsPage() {
           ) : (
             <>
               <div className="chat-header">
-                <div className="flex items-center gap-3" style={{ minWidth: 0 }}>
+                <button
+                  type="button"
+                  className="chat-header-profile-btn"
+                  onClick={() => setShowPeerProfile(true)}
+                  aria-haspopup="dialog"
+                  aria-expanded={showPeerProfile}
+                  title="Profil anzeigen"
+                >
                   <PeerAvatar pictureUrl={selectedPeer.profilePicture} name={selectedPeer.displayName} size={40} />
                   <div style={{ minWidth: 0 }}>
                     <div className="font-medium truncate" style={{ fontSize: 14 }}>{selectedPeer.displayName}</div>
@@ -1084,6 +1325,10 @@ export default function ChatsPage() {
                         {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
                           ? ` · ${selectedPeer.baseName}`
                           : ''}
+                        {e2eeFeatureFlagOn && !contactE2eePreferenceOn(selectedPeer.contact)
+                          ? ' · Klartext (ausgehend)'
+                          : ''}
+                        {!e2eeFeatureFlagOn ? ' · E2EE aus (Feature-Flag)' : ''}
                       </span>
                       {selectedPeer.bio ? (
                         <span className="chat-header-bio" title={selectedPeer.bio}>
@@ -1092,8 +1337,43 @@ export default function ChatsPage() {
                       ) : null}
                     </div>
                   </div>
-                </div>
+                </button>
                 <div className="chat-header-actions">
+                  {e2eeFeatureFlagOn ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-icon"
+                      onClick={() => {
+                        if (!selectedPeer) return;
+                        const on = contactE2eePreferenceOn(selectedPeer.contact);
+                        const next = !on;
+                        setContactE2eeEnabled(selectedPeer.id, next);
+                        toast({
+                          variant: 'success',
+                          title: next ? 'E2EE aktiv' : 'E2EE aus',
+                          message: next
+                            ? 'Ausgehende Nachrichten werden wieder verschlüsselt, sobald eine Sitzung besteht.'
+                            : 'Ausgehende Nachrichten gehen unverschlüsselt; eingehende E2EE-Nachrichten werden weiter entschlüsselt.',
+                        });
+                      }}
+                      title={
+                        contactE2eePreferenceOn(selectedPeer.contact)
+                          ? 'Ende-zu-Ende für diesen Chat deaktivieren (Klartext senden)'
+                          : 'Ende-zu-Ende für diesen Chat aktivieren'
+                      }
+                      aria-label={
+                        contactE2eePreferenceOn(selectedPeer.contact)
+                          ? 'Ende-zu-Ende-Verschlüsselung deaktivieren'
+                          : 'Ende-zu-Ende-Verschlüsselung aktivieren'
+                      }
+                    >
+                      {contactE2eePreferenceOn(selectedPeer.contact) ? (
+                        <Lock size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                      ) : (
+                        <Unlock size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                      )}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
@@ -1142,6 +1422,18 @@ export default function ChatsPage() {
                 {selectedPeer.contact?.blocked && (
                   <div className="chat-warning" role="status">
                     This contact is blocked. Unblock to send messages or see them in the main chat list.
+                  </div>
+                )}
+                {!selectedPeer.contact?.blocked && !e2eeFeatureFlagOn && (
+                  <div className="chat-notice-muted" role="status">
+                    Ausgehende Ende-zu-Ende-Verschlüsselung ist app-weit unter Feature-Flags deaktiviert. Eingehende
+                    E2EE-Nachrichten werden weiterhin entschlüsselt.
+                  </div>
+                )}
+                {!selectedPeer.contact?.blocked && e2eeFeatureFlagOn && !contactE2eePreferenceOn(selectedPeer.contact) && (
+                  <div className="chat-notice-muted" role="status">
+                    Ausgehende Nachrichten in diesem Chat sind unverschlüsselt. Eingehende verschlüsselte Nachrichten
+                    werden weiterhin entschlüsselt.
                   </div>
                 )}
                 {hasMoreMessages && (
@@ -1231,101 +1523,135 @@ export default function ChatsPage() {
                 <div ref={endRef} />
               </div>
 
-              {pendingFile && (
-                <div className="pending-file">
-                  <div className="pending-file-icon-wrap" aria-hidden>
-                    <FileTypeIcon mime={pendingFile.type} fileName={pendingFile.name} size={20} />
-                  </div>
-                  <div className="pending-file-info">
-                    <div className="pending-file-name">{pendingFile.name}</div>
-                    <div className="pending-file-meta">{formatSize(pendingFile.size)}</div>
-                  </div>
-                  <button
-                    className="btn btn-ghost btn-icon"
-                    onClick={() => !sendingFile && setPendingFile(null)}
-                    disabled={sendingFile}
-                    title="Anhang entfernen"
-                    type="button"
+              <div className="chat-composer-stack">
+                {showOfflineComposerReconnect && (
+                  <div
+                    className="chat-offline-reconnect-overlay"
+                    role="status"
+                    aria-live="polite"
                   >
-                    <X size={16} strokeWidth={CHAT_ICON_STROKE} />
+                    <div className="chat-offline-reconnect-overlay-inner">
+                      <span className="chat-offline-reconnect-dot" aria-hidden />
+                      <span className="chat-offline-reconnect-text">
+                        {offlineReconnectAddress
+                          ? 'Verbindung wird wiederhergestellt …'
+                          : 'Offline — keine gespeicherte Adresse für diesen Peer.'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {pendingFile && (
+                  <div className="pending-file">
+                    <div className="pending-file-icon-wrap" aria-hidden>
+                      <FileTypeIcon mime={pendingFile.type} fileName={pendingFile.name} size={20} />
+                    </div>
+                    <div className="pending-file-info">
+                      <div className="pending-file-name">{pendingFile.name}</div>
+                      <div className="pending-file-meta">{formatSize(pendingFile.size)}</div>
+                    </div>
+                    <button
+                      className="btn btn-ghost btn-icon"
+                      onClick={() => !sendingFile && clearPendingFile()}
+                      disabled={sendingFile}
+                      title="Anhang entfernen"
+                      type="button"
+                    >
+                      <X size={16} strokeWidth={CHAT_ICON_STROKE} />
+                    </button>
+                  </div>
+                )}
+
+                {fileTransfer && (
+                  <div
+                    className="chat-file-progress"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(fileTransfer.percent)}
+                    aria-label={fileTransfer.detail}
+                  >
+                    <div className="chat-file-progress-track">
+                      <div
+                        className="chat-file-progress-fill"
+                        style={{ width: `${Math.min(100, fileTransfer.percent)}%` }}
+                      />
+                    </div>
+                    <div className="chat-file-progress-label">
+                      {fileTransfer.detail} <span className="text-muted">{Math.round(fileTransfer.percent)}%</span>
+                    </div>
+                  </div>
+                )}
+
+                {warning && <div className="chat-warning">{warning}</div>}
+
+                <div className="chat-input-bar">
+                  <input
+                    type="file"
+                    hidden
+                    ref={fileInputRef}
+                    onChange={handleFilePicked}
+                    disabled={
+                      readingFile
+                      || sendingFile
+                      || !selectedPeer
+                      || selectedPeer.contact?.blocked
+                      || showOfflineComposerReconnect
+                    }
+                  />
+                  <button
+                    className="btn btn-secondary btn-icon"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={
+                      readingFile
+                      || sendingFile
+                      || !selectedPeer
+                      || selectedPeer.contact?.blocked
+                      || showOfflineComposerReconnect
+                    }
+                    title="Datei anhängen"
+                    style={{ height: 40, width: 40 }}
+                  >
+                    <Paperclip size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                  </button>
+                  <textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
+                    placeholder={
+                      selectedPeer.contact?.blocked
+                        ? 'Unblock to send messages…'
+                        : showOfflineComposerReconnect
+                          ? 'Warte auf Verbindung …'
+                          : readingFile
+                            ? 'Reading file…'
+                            : 'Type a message… (Markdown supported)'
+                    }
+                    rows={1}
+                    disabled={Boolean(selectedPeer.contact?.blocked || showOfflineComposerReconnect)}
+                  />
+                  <button
+                    className="btn btn-primary btn-icon"
+                    onClick={send}
+                    disabled={
+                      sendingFile
+                      || readingFile
+                      || (!input.trim() && !pendingFile)
+                      || Boolean(selectedPeer.contact?.blocked)
+                      || showOfflineComposerReconnect
+                    }
+                    style={{ height: 40, width: 40 }}
+                    title="Nachricht senden"
+                  >
+                    <SendHorizontal size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
                   </button>
                 </div>
-              )}
-
-              {fileTransfer && (
-                <div
-                  className="chat-file-progress"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(fileTransfer.percent)}
-                  aria-label={fileTransfer.detail}
-                >
-                  <div className="chat-file-progress-track">
-                    <div
-                      className="chat-file-progress-fill"
-                      style={{ width: `${Math.min(100, fileTransfer.percent)}%` }}
-                    />
-                  </div>
-                  <div className="chat-file-progress-label">
-                    {fileTransfer.detail} <span className="text-muted">{Math.round(fileTransfer.percent)}%</span>
-                  </div>
-                </div>
-              )}
-
-              {warning && <div className="chat-warning">{warning}</div>}
-
-              <div className="chat-input-bar">
-                <input
-                  type="file"
-                  hidden
-                  ref={fileInputRef}
-                  onChange={handleFilePicked}
-                  disabled={readingFile || sendingFile || !selectedPeer || selectedPeer.contact?.blocked}
-                />
-                <button
-                  className="btn btn-secondary btn-icon"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={readingFile || sendingFile || !selectedPeer || selectedPeer.contact?.blocked}
-                  title="Datei anhängen"
-                  style={{ height: 40, width: 40 }}
-                >
-                  <Paperclip size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                </button>
-                <textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      send();
-                    }
-                  }}
-                  placeholder={
-                    selectedPeer.contact?.blocked
-                      ? 'Unblock to send messages…'
-                      : readingFile
-                        ? 'Reading file…'
-                        : 'Type a message… (Markdown supported)'
-                  }
-                  rows={1}
-                  disabled={Boolean(selectedPeer.contact?.blocked)}
-                />
-                <button
-                  className="btn btn-primary btn-icon"
-                  onClick={send}
-                  disabled={
-                    sendingFile
-                    || readingFile
-                    || (!input.trim() && !pendingFile)
-                    || Boolean(selectedPeer.contact?.blocked)
-                  }
-                  style={{ height: 40, width: 40 }}
-                  title="Nachricht senden"
-                >
-                  <SendHorizontal size={17} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                </button>
               </div>
             </>
           )}
@@ -1362,6 +1688,95 @@ export default function ChatsPage() {
                   </span>
                 ) : 'Connect'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPeerProfile && selectedPeer && (
+        <div className="modal-overlay" onClick={() => setShowPeerProfile(false)} role="presentation">
+          <div
+            className="modal animate-scale peer-profile-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="peer-profile-title"
+          >
+            <div className="peer-profile-modal-toolbar">
+              <h2 id="peer-profile-title" className="peer-profile-modal-title">
+                Profil
+              </h2>
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                onClick={() => setShowPeerProfile(false)}
+                aria-label="Schließen"
+              >
+                <X size={18} strokeWidth={CHAT_ICON_STROKE} />
+              </button>
+            </div>
+            <div className="peer-profile-modal-body">
+              <div className="peer-profile-modal-hero">
+                <PeerAvatar pictureUrl={selectedPeer.profilePicture} name={selectedPeer.displayName} size={72} />
+                <div className="peer-profile-modal-name">{selectedPeer.displayName}</div>
+                {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname ? (
+                  <div className="text-sm text-muted">{selectedPeer.baseName}</div>
+                ) : null}
+              </div>
+              <div className="peer-profile-field">
+                <span className="peer-profile-field-label">Status</span>
+                <span>
+                  {selectedPeer.contact?.blocked
+                    ? 'Blockiert'
+                    : selectedPeer.offline
+                      ? 'Offline'
+                      : 'Online'}
+                  {e2eeFeatureFlagOn && !contactE2eePreferenceOn(selectedPeer.contact)
+                    ? ' · Ausgehend ohne E2EE'
+                    : ''}
+                  {!e2eeFeatureFlagOn ? ' · E2EE app-weit aus (Feature-Flag)' : ''}
+                </span>
+              </div>
+              <div className="peer-profile-field">
+                <span className="peer-profile-field-label">Peer-ID</span>
+                <div className="peer-profile-id-row">
+                  <span className="peer-profile-id-text">{selectedPeer.id}</span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-icon btn-sm"
+                    title="Peer-ID kopieren"
+                    aria-label="Peer-ID kopieren"
+                    onClick={() => copyToClipboard(selectedPeer.id, 'Peer-ID kopiert')}
+                  >
+                    <Copy size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                  </button>
+                </div>
+              </div>
+              {peerProfileAddress(selectedPeer) ? (
+                <div className="peer-profile-field">
+                  <span className="peer-profile-field-label">Adresse</span>
+                  <div className="peer-profile-id-row">
+                    <span className="peer-profile-id-text">{peerProfileAddress(selectedPeer)}</span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-icon btn-sm"
+                      title="Adresse kopieren"
+                      aria-label="Adresse kopieren"
+                      onClick={() =>
+                        copyToClipboard(peerProfileAddress(selectedPeer), 'Adresse kopiert')
+                      }
+                    >
+                      <Copy size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {selectedPeer.bio ? (
+                <div className="peer-profile-field peer-profile-field--bio">
+                  <span className="peer-profile-field-label">Info</span>
+                  <p className="peer-profile-bio">{selectedPeer.bio}</p>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1488,6 +1903,32 @@ export default function ChatsPage() {
             )}
             {listContextMenu.chat.pinned ? 'Chat lösen' : 'Chat anheften'}
           </button>
+          {e2eeFeatureFlagOn ? (
+            <button
+              type="button"
+              className="chat-list-context-menu-item"
+              role="menuitem"
+              onClick={() => {
+                const id = listContextMenu.chat.id;
+                const on = contactE2eePreferenceOn(listContextMenu.chat.contact);
+                setContactE2eeEnabled(id, !on);
+                toast({
+                  variant: 'success',
+                  title: !on ? 'E2EE aktiv' : 'E2EE aus',
+                });
+                closeListContextMenu();
+              }}
+            >
+              {contactE2eePreferenceOn(listContextMenu.chat.contact) ? (
+                <Unlock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+              ) : (
+                <Lock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+              )}
+              {contactE2eePreferenceOn(listContextMenu.chat.contact)
+                ? 'E2EE deaktivieren (Klartext)'
+                : 'E2EE aktivieren'}
+            </button>
+          ) : null}
           <button
             type="button"
             className="chat-list-context-menu-item"
