@@ -435,6 +435,38 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        <section style={{ marginBottom: 28 }}>
+          <div className="section-title">
+            <h3>
+              <span className="section-title-icon" aria-hidden>
+                <Plug size={15} strokeWidth={ICON_STROKE} />
+              </span>
+              Connections
+            </h3>
+          </div>
+          <div className="card flex flex-col gap-3">
+            <div className="input-group">
+              <label>Reconnect to contacts</label>
+              <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                Retry outbound connections to every saved contact address and refresh LAN discovery. Use this after a network change or if peers show as offline.
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={redialSavedContacts}
+                disabled={redialing || !window.bluetalk?.peer?.reconnectContacts}
+              >
+                <RefreshCw size={15} strokeWidth={ICON_STROKE} />
+                {redialing ? 'Reconnecting…' : 'Reconnect'}
+              </button>
+            </div>
+            <div className="flex items-center gap-2" style={{ fontSize: 13 }}>
+              <span className="text-muted">Currently connected:</span>
+              <span className="badge badge-default">{peers.length}</span>
+            </div>
+          </div>
+        </section>
+
         {local.debugMode && (
         <section style={{ marginBottom: 28 }}>
           <div className="section-title">
@@ -607,22 +639,6 @@ export default function SettingsPage() {
               {configTail ? (
                 <pre className="code-block" style={{ marginTop: 8, maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{configTail}</pre>
               ) : null}
-            </div>
-
-            <div className="input-group">
-              <label>Reconnect</label>
-              <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
-                Retry outbound connections to every saved contact address (after a network or API port change).
-              </p>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={redialSavedContacts}
-                disabled={redialing}
-              >
-                <Plug size={15} strokeWidth={ICON_STROKE} />
-                {redialing ? 'Reconnecting…' : 'Redial saved contacts'}
-              </button>
             </div>
 
             <div className="mt-1">
@@ -940,7 +956,7 @@ export default function SettingsPage() {
                   <Bug size={15} strokeWidth={ICON_STROKE} aria-hidden />
                   Debug mode
                 </span>
-                <span>Show the Network section (addresses, API port, port tests, doctor, config tail, reconnect)</span>
+                <span>Show the Network section (addresses, API port, port tests, doctor, config tail)</span>
               </div>
               <label className="toggle">
                 <input
