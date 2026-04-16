@@ -4,6 +4,7 @@ const menuOpen = ref(false)
 
 const navItems = [
   { to: '/', label: 'Overview' },
+  { to: '/features', label: 'Features' },
   { to: '/download', label: 'Download' },
 ]
 
