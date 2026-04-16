@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Archive,
+  Ban,
   Copy,
   File,
   FileCode,
@@ -94,7 +95,7 @@ function PeerAvatar({ pictureUrl, name, size = 36, className = '' }) {
   );
 }
 
-const MAX_CHAT_FILE_SIZE_GB = 5;
+const MAX_CHAT_FILE_SIZE_GB = 15;
 const MAX_CHAT_FILE_SIZE_BYTES = MAX_CHAT_FILE_SIZE_GB * 1024 * 1024 * 1024;
 const CHAT_BATCH_SIZE = 24;
 
@@ -501,6 +502,7 @@ export default function ChatsPage() {
     connectToAddress,
     setContactNickname,
     setChatPinned,
+    setContactBlocked,
     deleteChat,
     deleteMessage,
   } = useApp();
@@ -789,6 +791,7 @@ export default function ChatsPage() {
 
   const send = () => {
     if (!selectedPeer) return;
+    if (selectedPeer.contact?.blocked) return;
     if (!input.trim() && !pendingFile) return;
     if (sendingFile) return;
 
@@ -962,7 +965,7 @@ export default function ChatsPage() {
     setSelectedPeerId(chat.id);
     const pad = 8;
     const mw = 232;
-    const mh = 220;
+    const mh = 280;
     let x = e.clientX;
     let y = e.clientY;
     if (x + mw > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - mw - pad);
@@ -1033,7 +1036,7 @@ export default function ChatsPage() {
             {filtered.map((chat) => (
               <div
                 key={chat.id}
-                className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}`}
+                  className={`list-item ${selectedPeer?.id === chat.id ? 'active' : ''}${chat.contact?.blocked ? ' list-item--blocked' : ''}`}
                 onClick={() => setSelectedPeerId(chat.id)}
                 onContextMenu={(e) => openChatListContextMenu(e, chat)}
               >
@@ -1077,7 +1080,7 @@ export default function ChatsPage() {
                     <div className="font-medium truncate" style={{ fontSize: 14 }}>{selectedPeer.displayName}</div>
                     <div className="text-sm text-muted chat-header-meta">
                       <span>
-                        {selectedPeer.offline ? 'Offline' : 'Online'}
+                        {selectedPeer.contact?.blocked ? 'Blocked' : selectedPeer.offline ? 'Offline' : 'Online'}
                         {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
                           ? ` · ${selectedPeer.baseName}`
                           : ''}
@@ -1091,6 +1094,26 @@ export default function ChatsPage() {
                   </div>
                 </div>
                 <div className="chat-header-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      if (!selectedPeer) return;
+                      const next = !selectedPeer.contact?.blocked;
+                      setContactBlocked(selectedPeer.id, next);
+                      toast({
+                        variant: 'success',
+                        title: next ? 'Contact blocked' : 'Contact unblocked',
+                        message: next
+                          ? 'They no longer appear in your chat list and cannot message you.'
+                          : 'You can chat with them again from New connections or by reconnecting.',
+                      });
+                    }}
+                    title={selectedPeer.contact?.blocked ? 'Unblock contact' : 'Block contact'}
+                  >
+                    <Ban size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden style={{ marginRight: 4 }} />
+                    {selectedPeer.contact?.blocked ? 'Unblock' : 'Block'}
+                  </button>
                   <button className="btn btn-secondary btn-sm" onClick={openNicknameDialog}>
                     Nickname
                   </button>
@@ -1116,6 +1139,11 @@ export default function ChatsPage() {
               </div>
 
               <div className="chat-messages">
+                {selectedPeer.contact?.blocked && (
+                  <div className="chat-warning" role="status">
+                    This contact is blocked. Unblock to send messages or see them in the main chat list.
+                  </div>
+                )}
                 {hasMoreMessages && (
                   <div className="chat-load-more">
                     <button className="btn btn-secondary btn-sm" onClick={loadOlderMessages} disabled={loadingMore}>
@@ -1253,12 +1281,12 @@ export default function ChatsPage() {
                   hidden
                   ref={fileInputRef}
                   onChange={handleFilePicked}
-                  disabled={readingFile || sendingFile || !selectedPeer}
+                  disabled={readingFile || sendingFile || !selectedPeer || selectedPeer.contact?.blocked}
                 />
                 <button
                   className="btn btn-secondary btn-icon"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={readingFile || sendingFile || !selectedPeer}
+                  disabled={readingFile || sendingFile || !selectedPeer || selectedPeer.contact?.blocked}
                   title="Datei anhängen"
                   style={{ height: 40, width: 40 }}
                 >
@@ -1274,13 +1302,25 @@ export default function ChatsPage() {
                       send();
                     }
                   }}
-                  placeholder={readingFile ? 'Reading file…' : 'Type a message… (Markdown supported)'}
+                  placeholder={
+                    selectedPeer.contact?.blocked
+                      ? 'Unblock to send messages…'
+                      : readingFile
+                        ? 'Reading file…'
+                        : 'Type a message… (Markdown supported)'
+                  }
                   rows={1}
+                  disabled={Boolean(selectedPeer.contact?.blocked)}
                 />
                 <button
                   className="btn btn-primary btn-icon"
                   onClick={send}
-                  disabled={sendingFile || readingFile || (!input.trim() && !pendingFile)}
+                  disabled={
+                    sendingFile
+                    || readingFile
+                    || (!input.trim() && !pendingFile)
+                    || Boolean(selectedPeer.contact?.blocked)
+                  }
                   style={{ height: 40, width: 40 }}
                   title="Nachricht senden"
                 >
@@ -1465,6 +1505,24 @@ export default function ChatsPage() {
           >
             <Copy size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
             Peer-ID kopieren
+          </button>
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const id = listContextMenu.chat.id;
+              const blocked = !listContextMenu.chat.contact?.blocked;
+              setContactBlocked(id, blocked);
+              toast({
+                variant: 'success',
+                title: blocked ? 'Contact blocked' : 'Contact unblocked',
+              });
+              closeListContextMenu();
+            }}
+          >
+            <Ban size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            {listContextMenu.chat.contact?.blocked ? 'Unblock' : 'Block'}
           </button>
           <div className="chat-list-context-menu-sep" role="separator" />
           <button
