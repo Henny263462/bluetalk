@@ -902,7 +902,14 @@ export default function ChatsPage() {
     setConnecting(true);
     setWarning('');
     try {
-      const peerInfo = await connectToAddress(connectAddress.trim());
+      let dial = connectAddress.trim();
+      if (window.bluetalk?.peer?.normalizeAddress) {
+        const norm = await window.bluetalk.peer.normalizeAddress(dial);
+        if (norm?.ok && norm.normalized) {
+          dial = norm.normalized;
+        }
+      }
+      const peerInfo = await connectToAddress(dial);
       setSelectedPeerId(peerInfo.id);
       setShowConnect(false);
       setConnectAddress('');

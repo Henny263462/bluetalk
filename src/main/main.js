@@ -3,7 +3,7 @@ const fs = require('fs/promises');
 const { autoUpdater } = require('electron-updater');
 const net = require('net');
 const path = require('path');
-const { PeerServer } = require(path.join(__dirname, '..', 'shared', 'peer-server.js'));
+const { PeerServer, normalizeConnectAddress } = require(path.join(__dirname, '..', 'shared', 'peer-server.js'));
 const { APIServer } = require(path.join(__dirname, '..', 'shared', 'api-server.js'));
 const Store = require(path.join(__dirname, '..', 'shared', 'store.js'));
 
@@ -12,6 +12,8 @@ let tray = null;
 let peerServer = null;
 let apiServer = null;
 let store = null;
+/** Last port the REST API successfully bound to; used to avoid unnecessary restarts. */
+let lastApiServerPort = null;
 let isQuitting = false;
 let updateCheckTimer = null;
 let updaterReady = false;
@@ -496,10 +498,106 @@ function applyLaunchAtLoginSetting() {
   }
 }
 
+function restartApiServerIfPortChanged() {
+  if (!apiServer || !store) return;
+  const nextPort = store.get('settings.apiPort', 19876);
+  if (lastApiServerPort !== null && nextPort === lastApiServerPort) {
+    return;
+  }
+  try {
+    apiServer.stop();
+    apiServer.start(nextPort);
+    lastApiServerPort = nextPort;
+  } catch (e) {
+    console.error('API server restart error:', e);
+  }
+}
+
 function handleSettingsMutation() {
   configureAutoUpdater();
   scheduleAutoUpdateChecks();
   applyLaunchAtLoginSetting();
+  restartApiServerIfPortChanged();
+  peerServer?.reconnectContactsFromStore();
+}
+
+async function readTailOfFile(filePath, maxBytes = 120_000) {
+  try {
+    const stat = await fs.stat(filePath);
+    const size = stat.size;
+    const start = size > maxBytes ? size - maxBytes : 0;
+    const length = size - start;
+    const fh = await fs.open(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(length);
+      await fh.read(buf, 0, length, start);
+      return { ok: true, path: filePath, truncated: start > 0, text: buf.toString('utf-8') };
+    } finally {
+      await fh.close();
+    }
+  } catch (e) {
+    return { ok: false, path: filePath, error: e?.message || 'read_failed' };
+  }
+}
+
+async function runNetworkDoctor() {
+  const portProbe = await runPortDiagnostics();
+  const peerInfo = peerServer?.getInfo?.() || null;
+  const apiPort = store?.get('settings.apiPort', 19876) ?? 19876;
+  const issues = [];
+  const fixes = [];
+
+  if (!peerInfo?.ports?.length) {
+    issues.push({ code: 'no_listen_ports', severity: 'error', message: 'No peer listen ports are active.' });
+  }
+
+  if (portProbe?.summary?.openCount === 0) {
+    issues.push({
+      code: 'outbound_probe_blocked',
+      severity: 'warn',
+      message: 'Outbound TCP probes to common ports did not succeed (strict firewall or offline).',
+    });
+  }
+
+  if (peerInfo?.addresses?.length === 0) {
+    issues.push({
+      code: 'no_lan_ipv4',
+      severity: 'warn',
+      message: 'No non-loopback IPv4 interfaces found; LAN discovery may be limited.',
+    });
+  }
+
+  if (portProbe?.recommendedPort && apiPort !== portProbe.recommendedPort) {
+    issues.push({
+      code: 'api_port_mismatch',
+      severity: 'info',
+      message: `REST API port (${apiPort}) differs from the first open outbound test port (${portProbe.recommendedPort}).`,
+    });
+    fixes.push({
+      code: 'align_api_port',
+      label: `Set API port to ${portProbe.recommendedPort}`,
+      settingKey: 'apiPort',
+      value: portProbe.recommendedPort,
+    });
+  }
+
+  return {
+    checkedAt: Date.now(),
+    portProbe,
+    peerInfo: peerInfo
+      ? {
+          id: peerInfo.id,
+          port: peerInfo.port,
+          ports: peerInfo.ports,
+          addresses: peerInfo.addresses,
+          endpoints: peerInfo.endpoints,
+          peerCount: peerInfo.peers?.length ?? 0,
+        }
+      : null,
+    apiPort,
+    issues,
+    fixes,
+  };
 }
 
 function testSinglePort(host, port) {
@@ -753,7 +851,9 @@ async function wipeAllLocalAppData() {
     await store.clearAll();
     peerServer.reloadIdentityFromStore();
     await peerServer.start();
-    apiServer.start(store.get('settings.apiPort', 19876));
+    const restoredPort = store.get('settings.apiPort', 19876);
+    apiServer.start(restoredPort);
+    lastApiServerPort = restoredPort;
     handleSettingsMutation();
     mainWindow?.webContents?.send('peers:list-sync', []);
     mainWindow?.webContents?.send('app:data-cleared', { kind: 'all' });
@@ -863,6 +963,31 @@ function setupIPC() {
   });
 
   ipcMain.handle('network:testPorts', async () => runPortDiagnostics());
+  ipcMain.handle('network:doctor', async () => runNetworkDoctor());
+
+  ipcMain.handle('app:getConfigLogPath', () => ({
+    ok: Boolean(store),
+    path: store ? path.join(app.getPath('userData'), 'bluetalk-config.json') : null,
+  }));
+
+  ipcMain.handle('app:readConfigTail', async (_, maxBytes) => {
+    if (!store) return { ok: false, error: 'not_ready' };
+    const configPath = path.join(app.getPath('userData'), 'bluetalk-config.json');
+    return readTailOfFile(configPath, typeof maxBytes === 'number' && maxBytes > 0 ? maxBytes : 120_000);
+  });
+
+  ipcMain.handle('peer:normalizeAddress', (_, raw) => {
+    try {
+      return { ok: true, normalized: normalizeConnectAddress(raw) };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'invalid_address' };
+    }
+  });
+
+  ipcMain.handle('peer:reconnectContacts', () => {
+    peerServer?.reconnectContactsFromStore();
+    return { ok: true };
+  });
 
   ipcMain.handle('updater:getState', () => patchUpdateState());
   ipcMain.handle('updater:check', async () => checkForAppUpdates('manual'));
@@ -932,7 +1057,9 @@ if (!gotSingleInstanceLock) {
         }
       }
     });
-    apiServer.start(store.get('settings.apiPort', 19876));
+    const initialApiPort = store.get('settings.apiPort', 19876);
+    apiServer.start(initialApiPort);
+    lastApiServerPort = initialApiPort;
   });
 }
 

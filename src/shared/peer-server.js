@@ -39,6 +39,59 @@ const DISCOVERY_INTERVAL = 5000;
 const DISCOVERY_MAGIC = 'BLUETALK_V2';
 const CONNECTION_TIMEOUT_MS = 3000;
 
+/**
+ * Normalize user-entered peer addresses (trim, strip /bt/ws paths, accept http/ws URLs).
+ * @param {string} rawInput
+ * @returns {string} host, or host:port when a port was given
+ */
+function normalizeConnectAddress(rawInput) {
+  let raw = String(rawInput || '').trim();
+  if (!raw) {
+    throw new Error('Address is required');
+  }
+  raw = raw.replace(/\s+/g, '');
+  raw = raw.replace(/\/bt\/ws\/?$/i, '');
+  raw = raw.replace(/\/$/, '');
+
+  let toParse = raw;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) {
+    toParse = `http://${raw}`;
+  }
+
+  try {
+    const u = new URL(toParse);
+    const host = u.hostname;
+    if (!host) {
+      throw new Error('Invalid address');
+    }
+    const port = u.port ? Number(u.port) : 0;
+    if (port > 0 && port <= 65535) {
+      return `${host}:${port}`;
+    }
+    return host;
+  } catch {
+    /* fall through */
+  }
+
+  const lastColon = raw.lastIndexOf(':');
+  if (lastColon > 0) {
+    const hostPart = raw.slice(0, lastColon);
+    const portPart = raw.slice(lastColon + 1);
+    const portNum = Number(portPart);
+    if (
+      portPart !== '' &&
+      Number.isInteger(portNum) &&
+      portNum > 0 &&
+      portNum <= 65535 &&
+      (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostPart) || /^[a-zA-Z0-9.-]+$/.test(hostPart))
+    ) {
+      return `${hostPart}:${portNum}`;
+    }
+  }
+
+  return raw;
+}
+
 class PeerServer extends EventEmitter {
   constructor(store) {
     super();
@@ -482,7 +535,8 @@ class PeerServer extends EventEmitter {
   }
 
   async connectTo(target) {
-    const descriptor = this._createConnectionDescriptor(target);
+    const normalized = typeof target === 'string' ? normalizeConnectAddress(target) : target;
+    const descriptor = this._createConnectionDescriptor(normalized);
 
     if (descriptor.peerId && this.peers.has(descriptor.peerId)) {
       return this.peers.get(descriptor.peerId).info;
@@ -1020,6 +1074,18 @@ class PeerServer extends EventEmitter {
     this.discoveredPeers.clear();
   }
 
+  /**
+   * Re-dial saved contact addresses (best-effort) after network-related settings change.
+   */
+  reconnectContactsFromStore() {
+    const contacts = this.store.get('contacts', []);
+    if (!Array.isArray(contacts)) return;
+    for (const contact of contacts) {
+      if (!contact?.address || typeof contact.address !== 'string') continue;
+      void this.connectTo(contact.address).catch(() => {});
+    }
+  }
+
   stop() {
     if (this._discoveryTimer) {
       clearInterval(this._discoveryTimer);
@@ -1047,4 +1113,4 @@ class PeerServer extends EventEmitter {
   }
 }
 
-module.exports = { PeerServer };
+module.exports = { PeerServer, normalizeConnectAddress };
