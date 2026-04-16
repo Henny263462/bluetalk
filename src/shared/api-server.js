@@ -62,6 +62,15 @@ class APIServer {
   }
 
   start(port) {
+    if (this.server) {
+      try {
+        this.server.close();
+      } catch {
+        /* ignore */
+      }
+      this.server = null;
+    }
+
     this.server = http.createServer(async (req, res) => {
       // CORS preflight
       if (req.method === 'OPTIONS') {
@@ -183,7 +192,14 @@ class APIServer {
       client.end();
     }
     this.sseClients.clear();
-    this.server?.close();
+    if (this.server) {
+      try {
+        this.server.close();
+      } catch {
+        /* ignore */
+      }
+      this.server = null;
+    }
   }
 }
 

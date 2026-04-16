@@ -17,6 +17,23 @@ const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
 const CHAT_MESSAGE_BATCH_SIZE = 24;
 
+const DEFAULT_APP_SETTINGS = {
+  displayName: 'Anonymous',
+  bio: '',
+  profilePicture: '',
+  peerPort: 0,
+  peerPorts: [],
+  apiPort: 19876,
+  autoUpdateEnabled: true,
+  autoDownloadUpdates: true,
+  minimizeToTray: true,
+  launchAtLogin: false,
+  theme: 'dark',
+  debugMode: false,
+  windowsNotifications: true,
+  sendReadReceipts: true,
+};
+
 function newChatMessageId() {
   try {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -121,22 +138,7 @@ export default function App() {
   const [loadedChats, setLoadedChats] = useState({});
   const [messages, setMessages] = useState({});
   const [theme, setTheme] = useState('dark');
-  const [settings, setSettings] = useState({
-    displayName: 'Anonymous',
-    bio: '',
-    profilePicture: '',
-    peerPort: 0,
-    peerPorts: [],
-    apiPort: 19876,
-    autoUpdateEnabled: true,
-    autoDownloadUpdates: true,
-    minimizeToTray: true,
-    launchAtLogin: false,
-    theme: 'dark',
-    debugMode: false,
-    windowsNotifications: true,
-    sendReadReceipts: true,
-  });
+  const [settings, setSettings] = useState({ ...DEFAULT_APP_SETTINGS });
   const messageCacheRef = useRef({});
   const deliveryTimersRef = useRef(new Map());
   const settingsRef = useRef(settings);
@@ -384,6 +386,33 @@ export default function App() {
       unsubs.forEach((unsub) => unsub?.());
     };
   }, [upsertContact, applyMessagePatch]);
+
+  useEffect(() => {
+    if (!window.bluetalk?.on) return undefined;
+    return window.bluetalk.on('app:data-cleared', (payload) => {
+      const kind = payload?.kind;
+      if (kind === 'all') {
+        setContacts([]);
+        setChatMeta({});
+        setMessages({});
+        setLoadedChats({});
+        setPeerReadReceipts({});
+        setPeers([]);
+        setSettings({ ...DEFAULT_APP_SETTINGS });
+        setTheme('dark');
+        setLoadError('');
+        window.location.hash = '#/';
+        return;
+      }
+      if (kind === 'messages') {
+        setChatMeta({});
+        setMessages({});
+        setLoadedChats({});
+        setPeerReadReceipts({});
+        window.location.hash = '#/';
+      }
+    });
+  }, []);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
