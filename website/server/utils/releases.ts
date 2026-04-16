@@ -9,6 +9,7 @@ type GhRelease = {
   draft?: boolean
   prerelease?: boolean
   published_at: string | null
+  body?: string | null
   assets: GhAsset[]
 }
 
@@ -22,6 +23,14 @@ export type ReleasePayload = {
    * (for example CI still uploading assets). Downloads may come from an older release instead.
    */
   pendingLatestTag: string | null
+}
+
+export type ReleaseEntry = {
+  tag: string
+  publishedAt: string | null
+  body: string | null
+  installer: { url: string; name: string; size: number } | null
+  portable: { url: string; name: string; size: number } | null
 }
 
 const REPO = 'Henny263462/bluetalk'
@@ -164,5 +173,43 @@ export async function resolveLatestWindowsAssets(): Promise<ReleasePayload> {
     }
   } catch {
     return { ...empty, error: 'Could not load release info' }
+  }
+}
+
+/** Fetch all non-draft releases sorted newest-first, with assets and changelog body. */
+export async function resolveAllReleases(): Promise<{ releases: ReleaseEntry[]; error: string | null }> {
+  const token = process.env.GITHUB_TOKEN
+  try {
+    const list = await fetchJson<GhRelease[]>(
+      `https://api.github.com/repos/${REPO}/releases?per_page=50`,
+      token,
+    )
+    if (!list.ok || !list.data) {
+      return { releases: [], error: `GitHub returned ${list.status}` }
+    }
+    const releases: ReleaseEntry[] = list.data
+      .filter((r) => !r.draft)
+      .map((r): ReleaseEntry => {
+        const { installer, portable } = pickWindowsAssets(r.assets || [])
+        return {
+          tag: r.tag_name,
+          publishedAt: r.published_at ?? null,
+          body: r.body?.trim() || null,
+          installer: installer
+            ? { url: installer.browser_download_url, name: installer.name, size: installer.size }
+            : null,
+          portable: portable
+            ? { url: portable.browser_download_url, name: portable.name, size: portable.size }
+            : null,
+        }
+      })
+      .sort((a, b) => {
+        const ta = a.publishedAt ? Date.parse(a.publishedAt) : 0
+        const tb = b.publishedAt ? Date.parse(b.publishedAt) : 0
+        return tb - ta
+      })
+    return { releases, error: null }
+  } catch {
+    return { releases: [], error: 'Could not load release info' }
   }
 }
