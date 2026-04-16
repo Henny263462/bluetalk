@@ -50,6 +50,8 @@ function getUpdateStatusLabel(state) {
       return 'Downloading';
     case 'downloaded':
       return 'Ready to install';
+    case 'pending_build':
+      return 'Build pending';
     case 'error':
       return 'Error';
     default:
@@ -64,6 +66,8 @@ function getUpdateBadgeClass(state) {
       return 'badge-blue';
     case 'downloaded':
       return 'badge-success';
+    case 'pending_build':
+      return 'badge-warn';
     case 'error':
       return 'badge-danger';
     default:
@@ -231,10 +235,11 @@ export default function SettingsPage() {
   const isDownloadingUpdate = updateAction === 'download' || updaterState?.status === 'downloading';
   const updateProgress = Math.max(0, Math.min(100, updaterState?.percent || 0));
   const latestVersion = updaterState?.downloadedVersion || updaterState?.availableVersion || '-';
-  const showManualDownload = updaterState?.supported && (
-    (!updaterState?.autoDownloadUpdates && updaterState?.status === 'available') ||
-    (updaterState?.status === 'error' && Boolean(updaterState?.availableVersion))
-  );
+  const showManualDownload = updaterState?.supported &&
+    updaterState?.status !== 'pending_build' && (
+      (!updaterState?.autoDownloadUpdates && updaterState?.status === 'available') ||
+      (updaterState?.status === 'error' && Boolean(updaterState?.availableVersion))
+    );
   const showInstallAction = updaterState?.supported && updaterState?.status === 'downloaded';
 
   return (
@@ -479,6 +484,12 @@ export default function SettingsPage() {
               {updaterState?.errorMessage && (
                 <div className="updater-note updater-note-error">
                   {updaterState.errorMessage}
+                </div>
+              )}
+
+              {updaterState?.status === 'pending_build' && updaterState?.message && (
+                <div className="updater-note updater-note-pending" role="status">
+                  {updaterState.message}
                 </div>
               )}
 

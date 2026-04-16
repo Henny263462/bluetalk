@@ -31,6 +31,26 @@ const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 const CHAT_MESSAGE_BATCH_SIZE = 24;
 
+/** GitHub release exists but `latest.yml` / blockmap not uploaded yet (electron-updater 404). */
+const UPDATE_RELEASE_PENDING_MESSAGE =
+  'The latest release does not include Windows update files yet—they may still be building or uploading. Try again in a few minutes.';
+
+function isReleaseAssetsPendingError(error) {
+  if (!error || typeof error !== 'object') return false;
+  const code = error.code;
+  if (code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') return true;
+  const status = error.statusCode ?? error.status;
+  if (status === 404) return true;
+  const msg = String(error.message || '').toLowerCase();
+  if (msg.includes('status code 404')) return true;
+  if (msg.includes('404')) {
+    if (msg.includes('latest.yml') || msg.includes('releases/download') || msg.includes('not found')) {
+      return true;
+    }
+  }
+  return false;
+}
+
 let updateState = {
   supported: false,
   status: 'idle',
@@ -270,12 +290,25 @@ async function checkForAppUpdates(source = 'manual') {
   try {
     await autoUpdater.checkForUpdates();
   } catch (error) {
-    patchUpdateState({
-      status: 'error',
-      message: 'Update check failed.',
-      errorMessage: error?.message || 'Unknown update error.',
-      lastCheckedAt: Date.now(),
-    });
+    if (isReleaseAssetsPendingError(error)) {
+      patchUpdateState({
+        status: 'pending_build',
+        message: UPDATE_RELEASE_PENDING_MESSAGE,
+        errorMessage: '',
+        availableVersion: '',
+        downloadedVersion: '',
+        releaseName: '',
+        releaseDate: 0,
+        lastCheckedAt: Date.now(),
+      });
+    } else {
+      patchUpdateState({
+        status: 'error',
+        message: 'Update check failed.',
+        errorMessage: error?.message || 'Unknown update error.',
+        lastCheckedAt: Date.now(),
+      });
+    }
   }
 
   return updateState;
@@ -294,11 +327,20 @@ async function downloadAppUpdate() {
   try {
     await autoUpdater.downloadUpdate();
   } catch (error) {
-    patchUpdateState({
-      status: 'error',
-      message: 'Update download failed.',
-      errorMessage: error?.message || 'Unknown download error.',
-    });
+    if (isReleaseAssetsPendingError(error)) {
+      patchUpdateState({
+        status: 'pending_build',
+        message: UPDATE_RELEASE_PENDING_MESSAGE,
+        errorMessage: '',
+        /* keep availableVersion / release info from update-available if present */
+      });
+    } else {
+      patchUpdateState({
+        status: 'error',
+        message: 'Update download failed.',
+        errorMessage: error?.message || 'Unknown download error.',
+      });
+    }
   }
 
   return updateState;
@@ -413,12 +455,21 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('error', (error) => {
-    patchUpdateState({
-      status: 'error',
-      message: 'Auto update error.',
-      errorMessage: error?.message || 'Unknown update error.',
-      lastCheckedAt: Date.now(),
-    });
+    if (isReleaseAssetsPendingError(error)) {
+      patchUpdateState({
+        status: 'pending_build',
+        message: UPDATE_RELEASE_PENDING_MESSAGE,
+        errorMessage: '',
+        lastCheckedAt: Date.now(),
+      });
+    } else {
+      patchUpdateState({
+        status: 'error',
+        message: 'Auto update error.',
+        errorMessage: error?.message || 'Unknown update error.',
+        lastCheckedAt: Date.now(),
+      });
+    }
   });
 
   configureAutoUpdater();

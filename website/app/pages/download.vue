@@ -13,6 +13,7 @@ type ReleasePayload = {
   installer: ReleaseAsset | null
   portable: ReleaseAsset | null
   error: string | null
+  pendingLatestTag: string | null
 }
 
 function formatBytes(bytes: number) {
@@ -61,6 +62,27 @@ const cards = computed(() => {
   ]
 })
 
+const releaseVersionText = computed(() => {
+  const tag = data.value?.tag?.trim()
+  return tag || null
+})
+
+const pendingLatestTag = computed(() => data.value?.pendingLatestTag?.trim() || null)
+
+const showBuildPendingNotice = computed(
+  () => Boolean(!pending.value && pendingLatestTag.value),
+)
+
+const buildPendingNoticeText = computed(() => {
+  const pend = pendingLatestTag.value
+  const offered = releaseVersionText.value
+  if (!pend) return ''
+  if (offered && offered !== pend) {
+    return `GitHub’s current release ${pend} does not list Windows installers yet—the build may still be uploading. The downloads below are from ${offered}, the newest release that already includes Windows installers.`
+  }
+  return `GitHub’s current release ${pend} does not list Windows installers yet—the build may still be uploading. Check back soon or browse past releases on GitHub.`
+})
+
 const showApiWarning = computed(() => Boolean(error.value || data.value?.error))
 const apiWarningText = computed(() => {
   if (error.value) {
@@ -80,9 +102,32 @@ const apiWarningText = computed(() => {
         <div class="section-heading download-heading">
           <span class="section-tag">Get BlueTalk</span>
           <h1>Download Options</h1>
+          <p v-if="pending" class="download-version-indicator" aria-live="polite">
+            Download BlueTalk …
+          </p>
+          <p v-else-if="releaseVersionText" class="download-version-indicator">
+            Download BlueTalk {{ releaseVersionText }}
+          </p>
+          <p v-else class="download-version-indicator download-version-indicator--muted">
+            Download BlueTalk
+          </p>
           <p>
             Pick the installer for a standard desktop setup or use the portable build
             when you need to keep installation overhead low.
+          </p>
+          <p v-if="showBuildPendingNotice" class="download-build-pending" role="status">
+            {{ buildPendingNoticeText }}
+          </p>
+          <p class="download-older-versions">
+            <a
+              :href="githubReleasesPage"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="download-older-versions-link"
+            >
+              Older releases on GitHub
+            </a>
+            <span class="download-older-versions-hint"> — browse and download any past version.</span>
           </p>
           <p v-if="showApiWarning" class="download-api-hint" role="status">
             {{ apiWarningText }}
