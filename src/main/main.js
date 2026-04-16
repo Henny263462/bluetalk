@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, Notification, dialog, session } = require('electron');
 const fs = require('fs/promises');
 const { autoUpdater } = require('electron-updater');
 const net = require('net');

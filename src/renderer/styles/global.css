@@ -958,7 +958,12 @@ select.input { appearance: none; background-image: url("data:image/svg+xml,%3Csv
 
 /* ============ Modal ============ */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-overlay-welcome { z-index: 1300; -webkit-app-region: no-drag; }
 .modal { background: var(--bg-1); border: 1px solid var(--border); border-radius: 16px; padding: 24px; min-width: 380px; max-width: 480px; box-shadow: var(--shadow-xl); }
+.modal-welcome { max-width: min(520px, calc(100vw - 32px)); }
+.modal-welcome-body { max-height: min(52vh, 360px); overflow-y: auto; margin: 0 -4px 4px; padding: 0 4px; }
+.release-notes-list { margin: 0; padding-left: 18px; color: var(--fg-2); font-size: 13px; line-height: 1.55; display: flex; flex-direction: column; gap: 8px; }
+.release-notes-list li { padding-left: 4px; }
 .modal h3 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: var(--fg-0); }
 .modal.modal-danger {
   border-color: color-mix(in srgb, var(--red) 40%, var(--border));

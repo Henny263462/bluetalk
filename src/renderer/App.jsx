@@ -12,6 +12,9 @@ import NotificationCenter from './components/NotificationCenter';
 import ProfileMenu from './components/ProfileMenu';
 import { ToastProvider } from './components/ToastProvider';
 import ErrorBoundary from './components/ErrorBoundary';
+import VersionWelcomeModal from './components/VersionWelcomeModal';
+import { APP_VERSION } from './appVersion';
+import { getReleaseNotesForVersion } from './releaseNotes';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -144,6 +147,7 @@ export default function App() {
   const settingsRef = useRef(settings);
   const [peerReadReceipts, setPeerReadReceipts] = useState({});
   const [loadError, setLoadError] = useState('');
+  const [showVersionWelcome, setShowVersionWelcome] = useState(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -401,6 +405,7 @@ export default function App() {
         setSettings({ ...DEFAULT_APP_SETTINGS });
         setTheme('dark');
         setLoadError('');
+        setShowVersionWelcome(false);
         window.location.hash = '#/';
         return;
       }
@@ -412,6 +417,35 @@ export default function App() {
         window.location.hash = '#/';
       }
     });
+  }, []);
+
+  useEffect(() => {
+    if (!window.bluetalk || loadError) return undefined;
+    let cancelled = false;
+    const notes = getReleaseNotesForVersion(APP_VERSION);
+    if (!notes) return undefined;
+
+    (async () => {
+      try {
+        const lastSeen = await window.bluetalk.store.get('lastSeenReleaseNotesVersion', '');
+        if (!cancelled && lastSeen !== APP_VERSION) {
+          setShowVersionWelcome(true);
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadError]);
+
+  const dismissVersionWelcome = useCallback(() => {
+    setShowVersionWelcome(false);
+    if (window.bluetalk) {
+      window.bluetalk.store.set('lastSeenReleaseNotesVersion', APP_VERSION);
+    }
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -629,6 +663,8 @@ export default function App() {
     });
   }, []);
 
+  const versionWelcomeNotes = getReleaseNotesForVersion(APP_VERSION);
+
   const ctx = {
     peers,
     contacts,
@@ -671,6 +707,12 @@ export default function App() {
         <ErrorBoundary>
           <HashRouter>
             <div className="app">
+              <VersionWelcomeModal
+                open={Boolean(versionWelcomeNotes && showVersionWelcome)}
+                title={versionWelcomeNotes?.title}
+                items={versionWelcomeNotes?.items}
+                onContinue={dismissVersionWelcome}
+              />
               <TitleBar />
               {loadError ? (
                 <div className="app-banner app-banner--error" role="alert">
