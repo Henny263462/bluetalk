@@ -13,6 +13,7 @@ import ProfileMenu from './components/ProfileMenu';
 import { ToastProvider } from './components/ToastProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import VersionWelcomeModal from './components/VersionWelcomeModal';
+import UsernameOnboardingModal from './components/UsernameOnboardingModal';
 import { APP_VERSION } from './appVersion';
 import { getReleaseNotesForVersion } from './releaseNotes';
 import {
@@ -32,6 +33,7 @@ const CHAT_MESSAGE_BATCH_SIZE = 24;
 
 const DEFAULT_APP_SETTINGS = {
   displayName: 'Anonymous',
+  onboardingUsernameDone: false,
   bio: '',
   profilePicture: '',
   peerPort: 0,
@@ -174,6 +176,8 @@ export default function App() {
   const [loadError, setLoadError] = useState('');
   const [showVersionWelcome, setShowVersionWelcome] = useState(false);
   const [e2eeBootNonce, setE2eeBootNonce] = useState(0);
+  const [showUsernameOnboarding, setShowUsernameOnboarding] = useState(false);
+  const [usernameOnboardingGateReady, setUsernameOnboardingGateReady] = useState(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -522,10 +526,21 @@ export default function App() {
         setChatMeta(meta);
         setPeerReadReceipts(storedReadReceipts && typeof storedReadReceipts === 'object' ? storedReadReceipts : {});
 
-        if (storedSettings) {
-          setSettings((s) => ({ ...s, ...storedSettings }));
-          if (storedSettings.theme) setTheme(storedSettings.theme);
+        const stored = storedSettings && typeof storedSettings === 'object' ? storedSettings : {};
+        let mergedSettings = { ...DEFAULT_APP_SETTINGS, ...stored };
+        const displayNameTrim = (mergedSettings.displayName || '').trim();
+        if (mergedSettings.onboardingUsernameDone !== true && displayNameTrim && displayNameTrim !== 'Anonymous') {
+          mergedSettings = { ...mergedSettings, onboardingUsernameDone: true };
+          window.bluetalk.store.set('settings', mergedSettings);
         }
+        setSettings(mergedSettings);
+        if (mergedSettings.theme) setTheme(mergedSettings.theme);
+
+        const needsUsernameOnboarding = mergedSettings.onboardingUsernameDone !== true
+          && (displayNameTrim === '' || displayNameTrim === 'Anonymous');
+        setShowUsernameOnboarding(needsUsernameOnboarding);
+        setUsernameOnboardingGateReady(true);
+
         setPeers(currentPeers || []);
         setLoadError('');
       } catch (e) {
@@ -560,6 +575,8 @@ export default function App() {
         ownEcdhPublicSpkiRef.current = '';
         e2eeSessionsRef.current = {};
         setE2eeBootNonce((n) => n + 1);
+        setUsernameOnboardingGateReady(true);
+        setShowUsernameOnboarding(true);
         window.location.hash = '#/';
         return;
       }
@@ -574,7 +591,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!window.bluetalk || loadError) return undefined;
+    if (!window.bluetalk || loadError || !usernameOnboardingGateReady || showUsernameOnboarding) return undefined;
     let cancelled = false;
     const notes = getReleaseNotesForVersion(APP_VERSION);
     if (!notes) return undefined;
@@ -593,7 +610,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loadError]);
+  }, [loadError, usernameOnboardingGateReady, showUsernameOnboarding]);
 
   const dismissVersionWelcome = useCallback(() => {
     setShowVersionWelcome(false);
@@ -876,6 +893,11 @@ export default function App() {
     });
   }, []);
 
+  const completeUsernameOnboarding = useCallback((name) => {
+    updateSettings({ displayName: name, onboardingUsernameDone: true });
+    setShowUsernameOnboarding(false);
+  }, [updateSettings]);
+
   const versionWelcomeNotes = getReleaseNotesForVersion(APP_VERSION);
 
   const ctx = {
@@ -921,6 +943,10 @@ export default function App() {
         <ErrorBoundary>
           <HashRouter>
             <div className="app">
+              <UsernameOnboardingModal
+                open={showUsernameOnboarding}
+                onSubmit={completeUsernameOnboarding}
+              />
               <VersionWelcomeModal
                 open={Boolean(versionWelcomeNotes && showVersionWelcome)}
                 title={versionWelcomeNotes?.title}
