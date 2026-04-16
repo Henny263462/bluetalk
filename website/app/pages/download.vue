@@ -61,6 +61,11 @@ const cards = computed(() => {
   ]
 })
 
+const releaseVersionText = computed(() => {
+  const tag = data.value?.tag?.trim()
+  return tag || null
+})
+
 const showApiWarning = computed(() => Boolean(error.value || data.value?.error))
 const apiWarningText = computed(() => {
   if (error.value) {
@@ -80,6 +85,15 @@ const apiWarningText = computed(() => {
         <div class="section-heading download-heading">
           <span class="section-tag">Get BlueTalk</span>
           <h1>Download Options</h1>
+          <p v-if="pending" class="download-version-indicator" aria-live="polite">
+            Download BlueTalk …
+          </p>
+          <p v-else-if="releaseVersionText" class="download-version-indicator">
+            Download BlueTalk {{ releaseVersionText }}
+          </p>
+          <p v-else class="download-version-indicator download-version-indicator--muted">
+            Download BlueTalk
+          </p>
           <p>
             Pick the installer for a standard desktop setup or use the portable build
             when you need to keep installation overhead low.
