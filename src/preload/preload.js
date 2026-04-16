@@ -34,6 +34,8 @@ contextBridge.exposeInMainWorld('bluetalk', {
   peer: {
     getInfo: () => ipcRenderer.invoke('peer:getInfo'),
     connect: (address) => ipcRenderer.invoke('peer:connect', address),
+    normalizeAddress: (raw) => ipcRenderer.invoke('peer:normalizeAddress', raw),
+    reconnectContacts: () => ipcRenderer.invoke('peer:reconnectContacts'),
     disconnect: (peerId) => ipcRenderer.invoke('peer:disconnect', peerId),
     send: (peerId, data) => ipcRenderer.invoke('peer:send', peerId, data),
     broadcast: (data) => ipcRenderer.invoke('peer:broadcast', data),
@@ -57,6 +59,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
   // Network diagnostics
   network: {
     testPorts: () => ipcRenderer.invoke('network:testPorts'),
+    doctor: () => ipcRenderer.invoke('network:doctor'),
   },
 
   // Auto updater
@@ -71,6 +74,8 @@ contextBridge.exposeInMainWorld('bluetalk', {
     clearCache: () => ipcRenderer.invoke('app:clearCache'),
     clearMessages: () => ipcRenderer.invoke('app:clearMessages'),
     wipeAllData: () => ipcRenderer.invoke('app:wipeAllData'),
+    getConfigLogPath: () => ipcRenderer.invoke('app:getConfigLogPath'),
+    readConfigTail: (maxBytes) => ipcRenderer.invoke('app:readConfigTail', maxBytes),
   },
 
   // Events from main process

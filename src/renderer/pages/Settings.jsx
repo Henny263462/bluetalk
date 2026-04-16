@@ -13,11 +13,14 @@ import {
   Globe,
   Moon,
   Network,
+  Plug,
   Power,
   RefreshCw,
   RotateCw,
+  ScrollText,
   Server,
   Settings2,
+  Stethoscope,
   Sun,
   TestTube2,
   Trash2,
@@ -84,6 +87,12 @@ export default function SettingsPage() {
   const [local, setLocal] = useState(settings);
   const [portDiagnostics, setPortDiagnostics] = useState(null);
   const [testingPorts, setTestingPorts] = useState(false);
+  const [doctorResult, setDoctorResult] = useState(null);
+  const [doctorLoading, setDoctorLoading] = useState(false);
+  const [configTail, setConfigTail] = useState('');
+  const [configPath, setConfigPath] = useState('');
+  const [configLoading, setConfigLoading] = useState(false);
+  const [redialing, setRedialing] = useState(false);
   const [updaterState, setUpdaterState] = useState(null);
   const [updateAction, setUpdateAction] = useState('');
   const [dataAction, setDataAction] = useState('');
@@ -181,6 +190,8 @@ export default function SettingsPage() {
       }
 
       if (openPorts.length > 0) {
+        void window.bluetalk?.peer?.reconnectContacts?.();
+        void window.bluetalk?.peer?.refreshDiscovery?.();
         toast({
           variant: 'success',
           title: 'Port test complete',
@@ -212,6 +223,76 @@ export default function SettingsPage() {
       });
     } finally {
       setTestingPorts(false);
+    }
+  };
+
+  const runNetworkDoctor = async () => {
+    if (!window.bluetalk?.network?.doctor || doctorLoading) return;
+    setDoctorLoading(true);
+    try {
+      const report = await window.bluetalk.network.doctor();
+      setDoctorResult(report);
+      if (report?.portProbe) {
+        setPortDiagnostics(report.portProbe);
+      }
+    } catch (e) {
+      const msg = e?.message || 'Doctor check failed.';
+      toast({ variant: 'error', title: 'Doctor failed', message: msg });
+    } finally {
+      setDoctorLoading(false);
+    }
+  };
+
+  const applyDoctorFix = (fix) => {
+    if (!fix?.settingKey) return;
+    if (fix.settingKey === 'apiPort') {
+      const next = Number(fix.value) || 19876;
+      change('apiPort', next);
+      toast({
+        variant: 'success',
+        title: 'Setting updated',
+        message: `API port set to ${next}. The REST listener was restarted.`,
+      });
+    }
+  };
+
+  const loadConfigTail = async () => {
+    if (!window.bluetalk?.app?.readConfigTail || configLoading) return;
+    setConfigLoading(true);
+    try {
+      const meta = await window.bluetalk.app.getConfigLogPath?.();
+      if (meta?.path) {
+        setConfigPath(meta.path);
+      }
+      const tail = await window.bluetalk.app.readConfigTail(120000);
+      if (tail?.ok) {
+        setConfigTail(tail.text || '');
+        if (tail.path) setConfigPath(tail.path);
+      } else {
+        setConfigTail(tail?.error || 'Could not read configuration file.');
+      }
+    } catch (e) {
+      setConfigTail(e?.message || 'Read failed.');
+    } finally {
+      setConfigLoading(false);
+    }
+  };
+
+  const redialSavedContacts = async () => {
+    if (!window.bluetalk?.peer?.reconnectContacts || redialing) return;
+    setRedialing(true);
+    try {
+      await window.bluetalk.peer.reconnectContacts();
+      void window.bluetalk.peer.refreshDiscovery?.();
+      toast({
+        variant: 'success',
+        title: 'Reconnect started',
+        message: 'Dialing saved contact addresses in the background.',
+      });
+    } catch (e) {
+      toast({ variant: 'error', title: 'Reconnect failed', message: e?.message || 'Unknown error' });
+    } finally {
+      setRedialing(false);
     }
   };
 
@@ -450,6 +531,98 @@ export default function SettingsPage() {
                   </div>
                 </div>
               )}
+            </div>
+
+            <div className="input-group">
+              <label>Network doctor</label>
+              <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                Combines outbound port probes with local listener state and suggests one-click fixes when they help.
+              </p>
+              <div className="flex gap-2" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={runNetworkDoctor}
+                  disabled={doctorLoading}
+                  title="Run connectivity and configuration checks"
+                >
+                  <Stethoscope size={15} strokeWidth={ICON_STROKE} />
+                  {doctorLoading ? 'Running…' : 'Run doctor'}
+                </button>
+                {doctorResult?.issues?.length ? (
+                  <span className="badge badge-warn">{doctorResult.issues.length} finding{doctorResult.issues.length !== 1 ? 's' : ''}</span>
+                ) : doctorResult ? (
+                  <span className="badge badge-success">No issues</span>
+                ) : null}
+              </div>
+              {doctorResult?.issues?.length > 0 && (
+                <ul className="text-sm" style={{ margin: '10px 0 0', paddingLeft: 18 }}>
+                  {doctorResult.issues.map((issue) => (
+                    <li key={issue.code} style={{ marginTop: 4 }}>
+                      <span className={`badge ${issue.severity === 'error' ? 'badge-danger' : issue.severity === 'warn' ? 'badge-warn' : 'badge-muted'}`} style={{ marginRight: 6 }}>
+                        {issue.severity}
+                      </span>
+                      {issue.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {doctorResult?.fixes?.length > 0 && (
+                <div className="flex gap-2" style={{ marginTop: 10, flexWrap: 'wrap' }}>
+                  {doctorResult.fixes.map((fix) => (
+                    <button
+                      key={fix.code}
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => applyDoctorFix(fix)}
+                    >
+                      {fix.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="input-group">
+              <label>Configuration log (tail)</label>
+              <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                Last portion of the on-disk settings JSON (no separate log file). Useful for support and verifying ports after changes.
+              </p>
+              <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={loadConfigTail}
+                  disabled={configLoading}
+                >
+                  <ScrollText size={15} strokeWidth={ICON_STROKE} />
+                  {configLoading ? 'Loading…' : 'Load tail'}
+                </button>
+                {configPath ? (
+                  <span className="text-xs text-muted font-mono" style={{ alignSelf: 'center', wordBreak: 'break-all' }} title={configPath}>
+                    {configPath}
+                  </span>
+                ) : null}
+              </div>
+              {configTail ? (
+                <pre className="code-block" style={{ marginTop: 8, maxHeight: 220, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{configTail}</pre>
+              ) : null}
+            </div>
+
+            <div className="input-group">
+              <label>Reconnect</label>
+              <p className="text-sm text-muted" style={{ margin: '0 0 8px' }}>
+                Retry outbound connections to every saved contact address (after a network or API port change).
+              </p>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={redialSavedContacts}
+                disabled={redialing}
+              >
+                <Plug size={15} strokeWidth={ICON_STROKE} />
+                {redialing ? 'Reconnecting…' : 'Redial saved contacts'}
+              </button>
             </div>
 
             <div className="mt-1">
@@ -767,7 +940,7 @@ export default function SettingsPage() {
                   <Bug size={15} strokeWidth={ICON_STROKE} aria-hidden />
                   Debug mode
                 </span>
-                <span>Show the Network section (addresses, API port, port tests)</span>
+                <span>Show the Network section (addresses, API port, port tests, doctor, config tail, reconnect)</span>
               </div>
               <label className="toggle">
                 <input
