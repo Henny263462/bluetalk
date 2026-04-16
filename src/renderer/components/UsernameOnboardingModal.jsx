@@ -1,0 +1,63 @@
+import React, { useEffect, useRef, useState } from 'react';
+
+export default function UsernameOnboardingModal({ open, onSubmit }) {
+  const inputRef = useRef(null);
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    if (!open) return undefined;
+    setValue('');
+    const t = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(t);
+  }, [open]);
+
+  if (!open) return null;
+
+  const trimmed = value.trim();
+  const canSubmit = trimmed.length > 0;
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    onSubmit?.(trimmed);
+  };
+
+  return (
+    <div
+      className="modal-overlay modal-overlay-onboarding"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="username-onboarding-title"
+    >
+      <div className="modal modal-welcome modal-onboarding animate-scale">
+        <h3 id="username-onboarding-title">Willkommen bei BlueTalk</h3>
+        <p className="modal-onboarding-lead">
+          Wähle einen Anzeigenamen. So erkennen dich andere Peers in Chats und bei Verbindungen.
+        </p>
+        <form onSubmit={handleSubmit}>
+          <div className="input-group" style={{ marginBottom: 4 }}>
+            <label htmlFor="username-onboarding-input">Benutzername</label>
+            <input
+              ref={inputRef}
+              id="username-onboarding-input"
+              className="input"
+              type="text"
+              autoComplete="username"
+              maxLength={64}
+              placeholder="z. B. Alex"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          </div>
+          <div className="modal-actions">
+            <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
+              Weiter
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
