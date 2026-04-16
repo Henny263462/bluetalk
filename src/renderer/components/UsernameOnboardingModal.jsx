@@ -32,13 +32,13 @@ export default function UsernameOnboardingModal({ open, onSubmit }) {
       aria-labelledby="username-onboarding-title"
     >
       <div className="modal modal-welcome modal-onboarding animate-scale">
-        <h3 id="username-onboarding-title">Willkommen bei BlueTalk</h3>
+        <h3 id="username-onboarding-title">Welcome to BlueTalk</h3>
         <p className="modal-onboarding-lead">
-          Wähle einen Anzeigenamen. So erkennen dich andere Peers in Chats und bei Verbindungen.
+          Choose a display name so other peers can recognize you in chats and when connecting.
         </p>
         <form onSubmit={handleSubmit}>
           <div className="input-group" style={{ marginBottom: 4 }}>
-            <label htmlFor="username-onboarding-input">Benutzername</label>
+            <label htmlFor="username-onboarding-input">Username</label>
             <input
               ref={inputRef}
               id="username-onboarding-input"
@@ -46,14 +46,14 @@ export default function UsernameOnboardingModal({ open, onSubmit }) {
               type="text"
               autoComplete="username"
               maxLength={64}
-              placeholder="z. B. Alex"
+              placeholder="e.g. Alex"
               value={value}
               onChange={(e) => setValue(e.target.value)}
             />
           </div>
           <div className="modal-actions">
             <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-              Weiter
+              Continue
             </button>
           </div>
         </form>
