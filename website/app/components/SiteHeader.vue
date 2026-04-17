@@ -1,6 +1,11 @@
 <script setup lang="ts">
 const route = useRoute()
 const menuOpen = ref(false)
+const { isLight, toggle, themeColor } = useColorMode()
+
+useHead(() => ({
+  meta: [{ name: 'theme-color', content: themeColor.value }],
+}))
 
 const navItems = [
   { to: '/', label: 'Overview' },
@@ -62,6 +67,41 @@ const toggleMenu = () => {
               {{ item.label }}
             </NuxtLink>
           </nav>
+
+          <button
+            type="button"
+            class="theme-toggle"
+            :aria-pressed="isLight"
+            :aria-label="isLight ? 'Switch to dark theme' : 'Switch to light theme'"
+            title="Toggle light / dark theme"
+            @click="toggle"
+          >
+            <span class="theme-toggle-icon" aria-hidden="true">
+              <svg
+                class="theme-toggle-svg theme-toggle-svg--sun"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+              </svg>
+              <svg
+                class="theme-toggle-svg theme-toggle-svg--moon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            </span>
+          </button>
 
           <a
             class="repo-link"

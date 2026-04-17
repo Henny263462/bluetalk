@@ -1,10 +1,18 @@
 const baseURL = process.env.NUXT_APP_BASE_URL || '/'
 
+const colorSchemeInit = `;(function(){var k='bluetalk-site-color-scheme';var d=document.documentElement;try{var v=localStorage.getItem(k);var light=v==='light'||(v!=='dark'&&window.matchMedia('(prefers-color-scheme: light)').matches);d.dataset.colorScheme=light?'light':'dark';d.style.colorScheme=light?'light':'dark';}catch(e){d.dataset.colorScheme='dark';d.style.colorScheme='dark';}})();`
+
 export default defineNuxtConfig({
   app: {
     baseURL,
     head: {
       titleTemplate: '%s · BlueTalk',
+      script: [
+        {
+          innerHTML: colorSchemeInit,
+          tagPosition: 'head',
+        },
+      ],
       meta: [
         {
           name: 'viewport',
@@ -14,7 +22,6 @@ export default defineNuxtConfig({
           name: 'description',
           content: 'Peer-to-peer messaging built for silence. No servers, no accounts, no traces.',
         },
-        { name: 'theme-color', content: '#0a0a0a' },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: `${baseURL}favicon.svg` },
