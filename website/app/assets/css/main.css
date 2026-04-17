@@ -7,6 +7,8 @@
 /* BlueTalk — aligned with src/renderer/styles/global.css (dark default) */
 :root {
   color-scheme: dark;
+  /* Hero canvas (RGB triplet for rgba() in HeroBackdrop.client.vue) */
+  --hero-backdrop-rgb: 59, 130, 246;
   --bg-0: #0a0a0a;
   --bg-1: #111111;
   --bg-2: #191919;
@@ -36,6 +38,34 @@
   --radius-xl: 12px;
   --radius-panel: 16px;
   --container: 920px;
+}
+
+:root[data-color-scheme='light'] {
+  color-scheme: light;
+  --hero-backdrop-rgb: 37, 99, 235;
+  --bg-0: #fafafa;
+  --bg-1: #ffffff;
+  --bg-2: #f4f4f5;
+  --bg-3: #e4e4e7;
+  --bg-hover: #f4f4f5;
+  --bg-active: #e4e4e7;
+  --fg-0: #18181b;
+  --fg-1: #52525b;
+  --fg-2: #71717a;
+  --fg-3: #a1a1aa;
+  --accent: #18181b;
+  --accent-hover: #27272a;
+  --accent-fg: #fafafa;
+  --accent-soft: rgba(24, 24, 27, 0.06);
+  --blue: #2563eb;
+  --blue-soft: rgba(37, 99, 235, 0.1);
+  --green: #16a34a;
+  --green-soft: rgba(22, 163, 74, 0.1);
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.06);
+  --shadow-md: 0 2px 8px rgba(24, 24, 27, 0.08);
+  --shadow-lg: 0 8px 24px rgba(24, 24, 27, 0.1);
 }
 
 html {
@@ -300,6 +330,61 @@ p {
   color: var(--fg-0);
 }
 
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  font: inherit;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.theme-toggle-icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--fg-2);
+}
+
+.theme-toggle-svg {
+  position: absolute;
+  inset: 0;
+  width: 18px;
+  height: 18px;
+  opacity: 0;
+}
+
+html[data-color-scheme='dark'] .theme-toggle-svg--sun,
+:root:not([data-color-scheme]) .theme-toggle-svg--sun {
+  opacity: 1;
+}
+
+html[data-color-scheme='light'] .theme-toggle-svg--moon {
+  opacity: 1;
+}
+
+@media (max-width: 768px) {
+  .theme-toggle {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 .hero {
   position: relative;
   padding: 48px 0 32px;
@@ -480,9 +565,9 @@ p {
   height: 2px;
   background: linear-gradient(
     90deg,
-    rgba(59, 130, 246, 0.15),
-    rgba(59, 130, 246, 0.45),
-    rgba(59, 130, 246, 0.15)
+    color-mix(in srgb, rgb(var(--hero-backdrop-rgb)) 15%, transparent),
+    color-mix(in srgb, rgb(var(--hero-backdrop-rgb)) 45%, transparent),
+    color-mix(in srgb, rgb(var(--hero-backdrop-rgb)) 15%, transparent)
   );
 }
 

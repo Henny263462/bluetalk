@@ -11,6 +11,18 @@ type NodePoint = {
   r: number
 }
 
+function readBackdropRgb(): string {
+  if (!import.meta.client) {
+    return '59, 130, 246'
+  }
+
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--hero-backdrop-rgb')
+    .trim()
+
+  return raw || '59, 130, 246'
+}
+
 onMounted(() => {
   const element = canvas.value
   if (!element) {
@@ -28,6 +40,8 @@ onMounted(() => {
   let height = 0
   let ratio = 1
   let points: NodePoint[] = []
+  let backdropRgb = readBackdropRgb()
+  let schemeObserver: MutationObserver | undefined
 
   const buildPoints = () => Array.from({ length: 16 }, () => ({
     x: Math.random() * width,
@@ -59,7 +73,7 @@ onMounted(() => {
         if (distance < 180) {
           const alpha = (1 - distance / 180) * 0.18
           context.beginPath()
-          context.strokeStyle = `rgba(59, 130, 246, ${alpha})`
+          context.strokeStyle = `rgba(${backdropRgb}, ${alpha})`
           context.lineWidth = 1
           context.moveTo(points[i].x, points[i].y)
           context.lineTo(points[j].x, points[j].y)
@@ -70,7 +84,7 @@ onMounted(() => {
 
     points.forEach((point) => {
       context.beginPath()
-      context.fillStyle = 'rgba(59, 130, 246, 0.14)'
+      context.fillStyle = `rgba(${backdropRgb}, 0.14)`
       context.arc(point.x, point.y, point.r, 0, Math.PI * 2)
       context.fill()
     })
@@ -106,6 +120,7 @@ onMounted(() => {
 
   resizeHandler = () => {
     window.cancelAnimationFrame(frame)
+    backdropRgb = readBackdropRgb()
     resize()
     draw()
 
@@ -114,11 +129,26 @@ onMounted(() => {
     }
   }
 
+  schemeObserver = new MutationObserver(() => {
+    const next = readBackdropRgb()
+    if (next !== backdropRgb) {
+      backdropRgb = next
+      draw()
+    }
+  })
+
+  schemeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-color-scheme'],
+  })
+
   window.addEventListener('resize', resizeHandler)
 })
 
 onBeforeUnmount(() => {
   window.cancelAnimationFrame(frame)
+
+  schemeObserver?.disconnect()
 
   if (resizeHandler) {
     window.removeEventListener('resize', resizeHandler)
