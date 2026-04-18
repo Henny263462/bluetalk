@@ -51,7 +51,29 @@ export const FEATURE_FLAG_DEFINITIONS = [
       'Wenn der Peer im geöffneten Chat nicht verbunden ist: unscharfer Bereich über der Textleiste mit Lade-Punkt, Eingabe gesperrt, und alle 3 Sekunden erneuter Verbindungsversuch zur gespeicherten Adresse (ohne Toast-Spam).',
     defaultEnabled: false,
   },
+  {
+    id: 'resizableUi',
+    label: 'Größenanpassbare Bereiche',
+    description:
+      'Zeigt Ziehgriffe zwischen linker Navigationsleiste und Inhalt sowie zwischen Chat-Liste und Gespräch. Ab ausreichender Breite: Icon links, Beschriftung rechts daneben, beides wird mit weiterem Aufziehen größer. Schmal bleibt die kompakte Darstellung. Breiten werden gespeichert; Doppelklick auf einen Griff setzt die Standardbreite.',
+    defaultEnabled: false,
+  },
+  {
+    id: 'contactNotificationMute',
+    label: 'Kontakt stummschalten (Mitteilungen)',
+    description:
+      'Erlaubt pro Kontakt Windows-Mitteilungen stummzuschalten: für eine feste Dauer (z. B. 1 h) oder bis du die Stummschaltung wieder aufhebst. Betrifft nur Benachrichtigungen, nicht den Nachrichteneingang.',
+    defaultEnabled: false,
+  },
 ];
+
+/** @param {object | null | undefined} contact */
+export function isContactNotificationMuted(contact, now = Date.now()) {
+  if (!contact || typeof contact !== 'object') return false;
+  if (contact.notifyMutedManual === true) return true;
+  if (typeof contact.notifyMutedUntil === 'number' && now < contact.notifyMutedUntil) return true;
+  return false;
+}
 
 const DEFAULT_FLAG_MAP = Object.fromEntries(
   FEATURE_FLAG_DEFINITIONS.map((d) => [d.id, d.defaultEnabled])

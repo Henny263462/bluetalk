@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld('bluetalk', {
   plugins: {
     list: () => ipcRenderer.invoke('plugins:list'),
     rescan: () => ipcRenderer.invoke('plugins:rescan'),
+    reseedBundled: () => ipcRenderer.invoke('plugins:reseedBundled'),
     setEnabled: (id, enabled) => ipcRenderer.invoke('plugins:setEnabled', id, enabled),
     openDir: () => ipcRenderer.invoke('plugins:openDir'),
     installFromDialog: () => ipcRenderer.invoke('plugins:installFromDialog'),

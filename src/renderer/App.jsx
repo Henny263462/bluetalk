@@ -33,6 +33,7 @@ import {
   importAesKeyFromRawB64,
 } from './chatCrypto';
 import { mergeFeatureFlagDefaults, getEffectiveFlag } from './featureFlags';
+import VerticalResizeHandle from './components/VerticalResizeHandle';
 
 const AppContext = createContext(null);
 export const useApp = () => useContext(AppContext);
@@ -55,6 +56,8 @@ const DEFAULT_APP_SETTINGS = {
   windowsNotifications: true,
   sendReadReceipts: true,
   featureFlags: mergeFeatureFlagDefaults(),
+  /** Gespeicherte Panel-Breiten (Pixel), nur wirksam mit Feature-Flag `resizableUi`. */
+  uiResize: {},
 };
 
 function newChatMessageId() {
@@ -102,6 +105,18 @@ function PluginRuntimeToastBridge() {
       }
     };
   }, [toast]);
+  return null;
+}
+
+/** Ref wird gesetzt, damit `peer:message`-Handler in `App` Toasts anzeigen kann (liegt außerhalb von `ToastProvider`). */
+function InboundToastBridge({ toastRef }) {
+  const { toast } = useToast();
+  useEffect(() => {
+    toastRef.current = toast;
+    return () => {
+      toastRef.current = null;
+    };
+  }, [toast, toastRef]);
   return null;
 }
 
@@ -165,7 +180,25 @@ function resolveLucideIcon(name) {
   return LucideIcons[camel] || Plug;
 }
 
+const SIDEBAR_WIDTH_DEFAULT = 56;
+const SIDEBAR_WIDTH_MIN = 56;
+const SIDEBAR_WIDTH_MAX = 280;
+
 function Sidebar() {
+  const { settings, updateSettings } = useApp();
+  const resizableUi = getEffectiveFlag(settings, 'resizableUi');
+  const storedSidebar = settings.uiResize?.sidebar;
+  const sidebarCommitted =
+    typeof storedSidebar === 'number'
+      ? Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, storedSidebar))
+      : SIDEBAR_WIDTH_DEFAULT;
+  const [sidebarPreview, setSidebarPreview] = useState(null);
+  const sidebarDragRef = useRef(sidebarCommitted);
+
+  useEffect(() => {
+    sidebarDragRef.current = sidebarCommitted;
+  }, [sidebarCommitted]);
+
   const [pluginTabs, setPluginTabs] = useState(() => pluginRuntime.listTabs());
 
   useEffect(() => {
@@ -173,6 +206,33 @@ function Sidebar() {
     setPluginTabs(pluginRuntime.listTabs());
     return off;
   }, []);
+
+  const sidebarDisplayWidth = resizableUi ? sidebarPreview ?? sidebarCommitted : undefined;
+
+  const onSidebarResizeBegin = useCallback(() => {
+    sidebarDragRef.current = sidebarPreview ?? sidebarCommitted;
+  }, [sidebarPreview, sidebarCommitted]);
+
+  const onSidebarResizeDelta = useCallback((dx) => {
+    sidebarDragRef.current = Math.min(
+      SIDEBAR_WIDTH_MAX,
+      Math.max(SIDEBAR_WIDTH_MIN, sidebarDragRef.current + dx)
+    );
+    setSidebarPreview(sidebarDragRef.current);
+  }, []);
+
+  const commitSidebarWidth = useCallback(() => {
+    const w = sidebarDragRef.current;
+    if (w !== sidebarCommitted) {
+      updateSettings({ uiResize: { sidebar: w } });
+    }
+    setSidebarPreview(null);
+  }, [sidebarCommitted, updateSettings]);
+
+  const resetSidebarWidth = useCallback(() => {
+    setSidebarPreview(null);
+    updateSettings({ uiResize: { sidebar: SIDEBAR_WIDTH_DEFAULT } });
+  }, [updateSettings]);
 
   const links = [
     { to: '/', label: 'Chats', icon: MessageCircle },
@@ -182,46 +242,57 @@ function Sidebar() {
   ];
 
   return (
-    <nav className="sidebar">
-      <div className="sidebar-nav">
-        {links.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-            title={label}
-          >
-            <Icon size={15} strokeWidth={2} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-        {pluginTabs.length > 0 ? (
-          <div className="sidebar-section-label">Plugins</div>
-        ) : null}
-        {pluginTabs.map((tab) => {
-          const Icon = resolveLucideIcon(tab.icon);
-          return (
+    <>
+      <nav
+        className={`sidebar${resizableUi ? ' sidebar--resizable' : ''}`}
+        style={sidebarDisplayWidth != null ? { width: sidebarDisplayWidth } : undefined}
+      >
+        <div className="sidebar-nav">
+          {links.map(({ to, label, icon: Icon }) => (
             <NavLink
-              key={tab.tabId}
-              to={tab.path}
-              className={({ isActive }) => `sidebar-link sidebar-link-plugin ${isActive ? 'active' : ''}`}
-              title={tab.label}
+              key={to}
+              to={to}
+              className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+              title={label}
             >
               <Icon size={15} strokeWidth={2} />
-              <span>{tab.label}</span>
+              <span>{label}</span>
             </NavLink>
-          );
-        })}
-      </div>
-      <div className="sidebar-footer">
-        <div className="sidebar-notif">
-          <NotificationCenter />
+          ))}
+          {pluginTabs.length > 0 ? <div className="sidebar-nav-divider" role="separator" aria-hidden="true" /> : null}
+          {pluginTabs.map((tab) => {
+            const Icon = resolveLucideIcon(tab.icon);
+            return (
+              <NavLink
+                key={tab.tabId}
+                to={tab.path}
+                className={({ isActive }) => `sidebar-link sidebar-link-plugin ${isActive ? 'active' : ''}`}
+                title={tab.label}
+              >
+                <Icon size={15} strokeWidth={2} />
+                <span>{tab.label}</span>
+              </NavLink>
+            );
+          })}
         </div>
-        <div className="sidebar-profile">
-          <ProfileMenu variant="sidebar" />
+        <div className="sidebar-footer">
+          <div className="sidebar-notif">
+            <NotificationCenter />
+          </div>
+          <div className="sidebar-profile">
+            <ProfileMenu variant="sidebar" />
+          </div>
         </div>
-      </div>
-    </nav>
+      </nav>
+      {resizableUi ? (
+        <VerticalResizeHandle
+          onBegin={onSidebarResizeBegin}
+          onDelta={onSidebarResizeDelta}
+          onCommit={commitSidebarWidth}
+          onDoubleClick={resetSidebarWidth}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -248,6 +319,7 @@ export default function App() {
   const [e2eeBootNonce, setE2eeBootNonce] = useState(0);
   const [showUsernameOnboarding, setShowUsernameOnboarding] = useState(false);
   const [usernameOnboardingGateReady, setUsernameOnboardingGateReady] = useState(false);
+  const inboundToastRef = useRef(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -440,6 +512,20 @@ export default function App() {
         const fromId = msg.from;
         const isBlocked = fromId && contactsRef.current.some((c) => c?.id === fromId && c.blocked === true);
 
+        if (msg.kind === 'messaging-blocked' && msg.refMessageId && fromId) {
+          const tid = deliveryTimersRef.current.get(msg.refMessageId);
+          if (tid) clearTimeout(tid);
+          deliveryTimersRef.current.delete(msg.refMessageId);
+          await applyMessagePatch(fromId, msg.refMessageId, { deliveryStatus: 'blocked' });
+          upsertContact({ id: fromId, blockedByPeer: true });
+          inboundToastRef.current?.({
+            variant: 'warning',
+            title: 'Nachricht nicht zugestellt',
+            message: 'Dieser Kontakt hat dich blockiert.',
+          });
+          return;
+        }
+
         if (msg.kind === 'profile' && fromId) {
           if (isBlocked) return;
           upsertContact({
@@ -478,6 +564,7 @@ export default function App() {
             deliveryStatus: 'delivered',
             deliveredAt: typeof msg.receivedAt === 'number' ? msg.receivedAt : Date.now(),
           });
+          upsertContact({ id: fromId, blockedByPeer: false });
           return;
         }
 
@@ -491,7 +578,18 @@ export default function App() {
           return;
         }
 
-        if (isBlocked) return;
+        if (isBlocked) {
+          const k = msg.kind;
+          const blockable = k === 'chat' || k === 'file' || k === 'encrypted-chat-e2ee';
+          if (blockable && fromId && msg.messageId) {
+            void window.bluetalk.peer.send(fromId, {
+              kind: 'messaging-blocked',
+              refMessageId: msg.messageId,
+              sender: settingsRef.current.displayName,
+            });
+          }
+          return;
+        }
 
         let normalized = {
           ...msg,
@@ -528,6 +626,8 @@ export default function App() {
         }
 
         const meta = await window.bluetalk.messages.append(fromId, normalized);
+
+        upsertContact({ id: fromId, blockedByPeer: false });
 
         setChatMeta((prev) => ({
           ...prev,
@@ -621,6 +721,10 @@ export default function App() {
         const stored = storedSettings && typeof storedSettings === 'object' ? storedSettings : {};
         let mergedSettings = { ...DEFAULT_APP_SETTINGS, ...stored };
         mergedSettings.featureFlags = mergeFeatureFlagDefaults(stored.featureFlags);
+        mergedSettings.uiResize = {
+          ...(DEFAULT_APP_SETTINGS.uiResize || {}),
+          ...(stored.uiResize && typeof stored.uiResize === 'object' ? stored.uiResize : {}),
+        };
         const displayNameTrim = (mergedSettings.displayName || '').trim();
         if (mergedSettings.onboardingUsernameDone !== true && displayNameTrim && displayNameTrim !== 'Anonymous') {
           mergedSettings = { ...mergedSettings, onboardingUsernameDone: true };
@@ -727,6 +831,10 @@ export default function App() {
     if (!window.bluetalk || !peerId) return Promise.resolve(false);
 
     if (contactsRef.current.some((c) => c?.id === peerId && c.blocked === true)) {
+      return Promise.resolve(false);
+    }
+
+    if (contactsRef.current.some((c) => c?.id === peerId && c.blockedByPeer === true)) {
       return Promise.resolve(false);
     }
 
@@ -970,6 +1078,26 @@ export default function App() {
     upsertContact({ id: contactId, e2eeEnabled: Boolean(enabled) });
   }, [upsertContact]);
 
+  /**
+   * @param {string} contactId
+   * @param {{ clear?: boolean, manual?: boolean, until?: number }} opts
+   *   clear: Mitteilungen wieder an; manual: stumm bis manuell aufheben; until: Stummschaltung bis Zeitstempel (ms)
+   */
+  const setContactNotificationMute = useCallback((contactId, opts = {}) => {
+    if (!contactId) return;
+    if (opts.clear) {
+      upsertContact({ id: contactId, notifyMutedManual: false, notifyMutedUntil: undefined });
+      return;
+    }
+    if (opts.manual === true) {
+      upsertContact({ id: contactId, notifyMutedManual: true, notifyMutedUntil: undefined });
+      return;
+    }
+    if (typeof opts.until === 'number') {
+      upsertContact({ id: contactId, notifyMutedManual: false, notifyMutedUntil: opts.until });
+    }
+  }, [upsertContact]);
+
   const setContactBlocked = useCallback((contactId, blocked) => {
     if (!contactId) return;
     upsertContact({ id: contactId, blocked: Boolean(blocked) });
@@ -1067,6 +1195,12 @@ export default function App() {
           ...newSettings.featureFlags,
         };
       }
+      if (newSettings.uiResize && typeof newSettings.uiResize === 'object') {
+        merged.uiResize = {
+          ...(prev.uiResize || {}),
+          ...newSettings.uiResize,
+        };
+      }
       if (window.bluetalk) {
         window.bluetalk.store.set('settings', merged);
         const profileKeys = ['displayName', 'bio', 'profilePicture'];
@@ -1119,6 +1253,7 @@ export default function App() {
     upsertContact,
     acceptMessageRequest,
     setContactBlocked,
+    setContactNotificationMute,
   };
 
   const peersRef = useRef(peers);
@@ -1151,6 +1286,7 @@ export default function App() {
     return (
       <AppContext.Provider value={ctx}>
         <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
+          <InboundToastBridge toastRef={inboundToastRef} />
           <RuntimeUnavailablePage />
         </ToastProvider>
       </AppContext.Provider>
@@ -1162,6 +1298,7 @@ export default function App() {
       <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
         <ErrorBoundary>
           <HashRouter>
+            <InboundToastBridge toastRef={inboundToastRef} />
             <PluginRuntimeToastBridge />
             <div className="app">
               <UsernameOnboardingModal

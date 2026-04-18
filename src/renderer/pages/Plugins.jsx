@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FolderOpen, Plug, Power, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { FolderOpen, Package, Plug, Power, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useToast } from '../components/ToastProvider';
 import { pluginRuntime } from '../plugins/pluginRuntime';
 
@@ -107,6 +107,25 @@ export default function PluginsPage() {
           <button type="button" className="btn btn-secondary btn-sm" onClick={rescan} disabled={busy === 'rescan'}>
             <RefreshCw size={15} strokeWidth={ICON_STROKE} />
             {busy === 'rescan' ? 'Rescanning…' : 'Rescan'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={async () => {
+              if (!window.bluetalk?.plugins?.reseedBundled) return;
+              setBusy('reseed');
+              try {
+                await window.bluetalk.plugins.reseedBundled();
+                await refresh();
+                toast({ variant: 'success', title: 'Bundled plugins restored' });
+              } finally {
+                setBusy('');
+              }
+            }}
+            disabled={busy === 'reseed'}
+          >
+            <Package size={15} strokeWidth={ICON_STROKE} />
+            {busy === 'reseed' ? 'Restoring…' : 'Restore bundled'}
           </button>
           <button type="button" className="btn btn-primary btn-sm" onClick={installFromDialog} disabled={busy === 'install'}>
             <Upload size={15} strokeWidth={ICON_STROKE} />

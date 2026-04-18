@@ -496,11 +496,12 @@ async function seedBundledPlugins(host) {
   } catch {
     return;
   }
+  await fs.mkdir(host.getPluginsDir(), { recursive: true }).catch(() => {});
   const pluginsDir = host.getPluginsDir();
-  const seeded = store?.get('plugins.seeded', {}) || {};
-  let dirty = false;
+  const userRemoved = store?.get('plugins.userRemoved', {}) || {};
   for (const entry of entries) {
     if (typeof entry.isDirectory === 'function' && !entry.isDirectory()) continue;
+    if (userRemoved[entry.name]) continue;
     const srcDir = path.join(bundledDir, entry.name);
     const destDir = path.join(pluginsDir, entry.name);
     let destExists = true;
@@ -509,19 +510,12 @@ async function seedBundledPlugins(host) {
     } catch {
       destExists = false;
     }
-    // Only seed on first run — once a user has seen a bundled plugin, don't recreate it if they uninstall.
-    if (!destExists && !seeded[entry.name]) {
-      try {
-        await host.installFromDirectory(srcDir);
-        seeded[entry.name] = true;
-        dirty = true;
-      } catch (e) {
-        console.error(`[PluginHost] seed ${entry.name}:`, e);
-      }
+    if (destExists) continue;
+    try {
+      await host.installFromDirectory(srcDir);
+    } catch (e) {
+      console.error(`[PluginHost] seed ${entry.name}:`, e);
     }
-  }
-  if (dirty && store) {
-    store.set('plugins.seeded', seeded);
   }
 }
 
@@ -732,6 +726,20 @@ function isContactBlockedInStore(peerId) {
   if (!store || !peerId) return false;
   const contacts = store.get('contacts', []);
   return contacts.some((c) => c && c.id === peerId && c.blocked === true);
+}
+
+function isContactNotificationMutedInStore(peerId) {
+  if (!store || !peerId) return false;
+  const settings = store.get('settings', {});
+  const flags = settings && typeof settings.featureFlags === 'object' ? settings.featureFlags : {};
+  if (flags.contactNotificationMute !== true) return false;
+  const contacts = store.get('contacts', []);
+  const c = contacts.find((x) => x && x.id === peerId);
+  if (!c) return false;
+  const now = Date.now();
+  if (c.notifyMutedManual === true) return true;
+  if (typeof c.notifyMutedUntil === 'number' && now < c.notifyMutedUntil) return true;
+  return false;
 }
 
 function queueIncomingChatNotification(data) {
@@ -1114,7 +1122,24 @@ function setupIPC() {
   });
   ipcMain.handle('plugins:uninstall', async (_, id) => {
     if (!pluginHost) return false;
-    return pluginHost.uninstall(id);
+    const result = await pluginHost.uninstall(id);
+    try {
+      const bundledDir = path.join(__dirname, '..', '..', 'assets', 'bundled-plugins', id);
+      await fs.access(bundledDir);
+      const userRemoved = store?.get('plugins.userRemoved', {}) || {};
+      userRemoved[id] = true;
+      store?.set('plugins.userRemoved', userRemoved);
+    } catch {
+      /* not a bundled plugin — ignore */
+    }
+    return result;
+  });
+  ipcMain.handle('plugins:reseedBundled', async () => {
+    if (!pluginHost) return false;
+    if (store) store.set('plugins.userRemoved', {});
+    await seedBundledPlugins(pluginHost);
+    await pluginHost.scan();
+    return true;
   });
   ipcMain.handle('plugins:invokeCommand', async (_, id, commandId, args) => {
     if (!pluginHost) return { ok: false, error: 'not_ready' };
@@ -1138,8 +1163,8 @@ function setupIPC() {
   for (const event of forwardEvents) {
     peerServer.on(event, (data) => {
       if (event === 'peer:message' && data?.from !== 'self' && data?.kind !== 'profile') {
-        if (data.kind !== 'delivery-receipt' && data.kind !== 'read-receipt') {
-          if (!isContactBlockedInStore(data.from)) {
+        if (data.kind !== 'delivery-receipt' && data.kind !== 'read-receipt' && data.kind !== 'messaging-blocked') {
+          if (!isContactBlockedInStore(data.from) && !isContactNotificationMutedInStore(data.from)) {
             queueIncomingChatNotification(data);
           }
         }
