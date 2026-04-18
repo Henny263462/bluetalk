@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -28,6 +29,7 @@ import {
   Trash2,
   Bell,
   X,
+  MoreVertical,
 } from 'lucide-react';
 import { useApp } from '../App';
 import { useToast } from '../components/ToastProvider';
@@ -73,9 +75,9 @@ function selfDeliveryLabel(m) {
   return { text: '', pending: false };
 }
 
-/** Ausgehende Nachrichten gesperrt: du hast blockiert oder der Peer hat dich blockiert. */
+/** Ausgehende Nachrichten gesperrt: nur wenn du diesen Kontakt blockiert hast (Peer-Block → Senden versuchen, bis Zustellung klappt). */
 function contactOutgoingBlocked(contact) {
-  return Boolean(contact?.blocked || contact?.blockedByPeer);
+  return Boolean(contact?.blocked);
 }
 
 function formatSize(bytes) {
@@ -170,7 +172,7 @@ function countUnreadPeerMessages(peerId, lastViewedTs, messagesByPeer, lastMessa
   return n;
 }
 
-/** Gespeicherte Präferenz pro Kontakt (nur wirksam, wenn das Feature-Flag „e2eeEncryption“ an ist). */
+/** Gespeicherte Präferenz pro Kontakt (Standard: E2EE an, außer `e2eeEnabled: false`). */
 function contactE2eePreferenceOn(contact) {
   return contact?.e2eeEnabled !== false;
 }
@@ -643,6 +645,10 @@ export default function ChatsPage() {
   const [fileTransfer, setFileTransfer] = useState(null);
   const [mediaLightbox, setMediaLightbox] = useState(null);
   const [showPeerProfile, setShowPeerProfile] = useState(false);
+  const [chatActionsMenuOpen, setChatActionsMenuOpen] = useState(false);
+  const [chatMenuPosition, setChatMenuPosition] = useState({ top: 0, left: 0 });
+  const chatActionsMenuBtnRef = useRef(null);
+  const chatActionsMenuPanelRef = useRef(null);
 
   const resizableUi = getEffectiveFlag(settings, 'resizableUi');
   const storedChatList = settings.uiResize?.chatList;
@@ -747,8 +753,7 @@ export default function ChatsPage() {
         bio,
         offline: !peer,
         pinned: Boolean(contact?.pinned),
-        e2eePlaintextBadge:
-          getEffectiveFlag(settings, 'e2eeEncryption') && contact?.e2eeEnabled === false,
+        e2eePlaintextBadge: contact?.e2eeEnabled === false,
         lastMessage: meta?.lastMessage || null,
         messageCount: meta?.count || 0,
       });
@@ -760,7 +765,7 @@ export default function ChatsPage() {
       const bTs = b.lastMessage?.timestamp || b.contact?.addedAt || 0;
       return bTs - aTs;
     });
-  }, [chatMeta, contacts, peers, settings]);
+  }, [chatMeta, contacts, peers]);
 
   const mainChatList = useMemo(
     () =>
@@ -805,6 +810,41 @@ export default function ChatsPage() {
     if (first) setSelectedPeerId(first.id);
   }, [openPeerFromNav, selectedPeerId, mainChatList]);
 
+  useEffect(() => {
+    setChatActionsMenuOpen(false);
+  }, [selectedPeerId]);
+
+  useLayoutEffect(() => {
+    if (!chatActionsMenuOpen || !chatActionsMenuBtnRef.current) return;
+    const r = chatActionsMenuBtnRef.current.getBoundingClientRect();
+    const menuWidth = 288;
+    const left = Math.min(Math.max(8, r.right - menuWidth), window.innerWidth - menuWidth - 8);
+    setChatMenuPosition({ top: r.bottom + 6, left });
+  }, [chatActionsMenuOpen]);
+
+  useEffect(() => {
+    if (!chatActionsMenuOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') setChatActionsMenuOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    let onDown = null;
+    const id = window.setTimeout(() => {
+      onDown = (e) => {
+        const t = e.target;
+        if (chatActionsMenuBtnRef.current?.contains(t)) return;
+        if (chatActionsMenuPanelRef.current?.contains(t)) return;
+        setChatActionsMenuOpen(false);
+      };
+      document.addEventListener('mousedown', onDown);
+    }, 0);
+    return () => {
+      window.clearTimeout(id);
+      document.removeEventListener('keydown', onKey);
+      if (onDown) document.removeEventListener('mousedown', onDown);
+    };
+  }, [chatActionsMenuOpen]);
+
   const msgs = selectedPeer ? messages[selectedPeer.id] || [] : [];
   const readUpToId = selectedPeer ? peerReadReceipts[selectedPeer.id] : null;
   const hasMoreMessages = selectedPeer ? selectedPeer.messageCount > msgs.length : false;
@@ -815,7 +855,6 @@ export default function ChatsPage() {
     selectedPeer &&
       !selectedPeer.peer &&
       !selectedPeer.contact?.blocked &&
-      !selectedPeer.contact?.blockedByPeer &&
       chatOfflineReconnectOverlayOn
   );
   const offlineReconnectAddress = useMemo(() => {
@@ -1119,7 +1158,6 @@ export default function ChatsPage() {
     setFileTransfer({ stage: 'reading', percent: 0, detail: 'Reading file…' });
     setWarning('');
     try {
-      const useFast = getEffectiveFlag(settings, 'fastFileRead');
       const data = await readFileAsBase64WithProgress(
         file,
         (p) => {
@@ -1129,7 +1167,7 @@ export default function ChatsPage() {
             detail: 'Reading file…',
           });
         },
-        useFast
+        true
       );
       setPendingFile((prev) => {
         if (prev?.objectUrl) {
@@ -1190,6 +1228,7 @@ export default function ChatsPage() {
     if (!selectedPeer) return;
     setNicknameInput(selectedPeer.contact?.nickname || '');
     setShowNickname(true);
+    setChatActionsMenuOpen(false);
   };
 
   const saveNickname = () => {
@@ -1201,6 +1240,7 @@ export default function ChatsPage() {
   const togglePinnedState = () => {
     if (!selectedPeer) return;
     setChatPinned(selectedPeer.id, !selectedPeer.pinned);
+    setChatActionsMenuOpen(false);
   };
 
   const confirmDeleteChat = async () => {
@@ -1240,6 +1280,7 @@ export default function ChatsPage() {
     setDeleteTargetPeerId(peerId);
     setShowDeleteConfirm(true);
     closeListContextMenu();
+    setChatActionsMenuOpen(false);
   };
 
   const openNicknameForChat = (chat) => {
@@ -1301,7 +1342,6 @@ export default function ChatsPage() {
   );
 
   const showUnreadListBadges = getEffectiveFlag(settings, 'chatUnreadListBadges');
-  const e2eeFeatureFlagOn = getEffectiveFlag(settings, 'e2eeEncryption');
   const contactNotificationMuteOn = getEffectiveFlag(settings, 'contactNotificationMute');
 
   return (
@@ -1443,10 +1483,7 @@ export default function ChatsPage() {
                         {selectedPeer.contact?.nickname && selectedPeer.baseName !== selectedPeer.contact.nickname
                           ? ` · ${selectedPeer.baseName}`
                           : ''}
-                        {e2eeFeatureFlagOn && !contactE2eePreferenceOn(selectedPeer.contact)
-                          ? ' · Klartext (ausgehend)'
-                          : ''}
-                        {!e2eeFeatureFlagOn ? ' · E2EE aus (Feature-Flag)' : ''}
+                        {!contactE2eePreferenceOn(selectedPeer.contact) ? ' · Klartext (ausgehend)' : ''}
                       </span>
                       {selectedPeer.bio ? (
                         <span className="chat-header-bio" title={selectedPeer.bio}>
@@ -1457,115 +1494,192 @@ export default function ChatsPage() {
                   </div>
                 </button>
                 <div className="chat-header-actions">
-                  {e2eeFeatureFlagOn ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-icon"
-                      onClick={() => {
-                        if (!selectedPeer) return;
-                        const on = contactE2eePreferenceOn(selectedPeer.contact);
-                        const next = !on;
-                        setContactE2eeEnabled(selectedPeer.id, next);
-                        toast({
-                          variant: 'success',
-                          title: next ? 'E2EE aktiv' : 'E2EE aus',
-                          message: next
-                            ? 'Ausgehende Nachrichten werden wieder verschlüsselt, sobald eine Sitzung besteht.'
-                            : 'Ausgehende Nachrichten gehen unverschlüsselt; eingehende E2EE-Nachrichten werden weiter entschlüsselt.',
-                        });
-                      }}
-                      title={
-                        contactE2eePreferenceOn(selectedPeer.contact)
-                          ? 'Ende-zu-Ende für diesen Chat deaktivieren (Klartext senden)'
-                          : 'Ende-zu-Ende für diesen Chat aktivieren'
-                      }
-                      aria-label={
-                        contactE2eePreferenceOn(selectedPeer.contact)
-                          ? 'Ende-zu-Ende-Verschlüsselung deaktivieren'
-                          : 'Ende-zu-Ende-Verschlüsselung aktivieren'
-                      }
-                    >
-                      {contactE2eePreferenceOn(selectedPeer.contact) ? (
-                        <Lock size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                      ) : (
-                        <Unlock size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                      )}
-                    </button>
-                  ) : null}
-                  {contactNotificationMuteOn && !selectedPeer.contact?.blocked ? (
-                    <div className="flex items-center gap-1" title="Windows-Mitteilungen für diesen Kontakt">
-                      <Bell size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden className="text-muted" />
-                      <select
-                        className="input"
-                        aria-label="Mitteilungen für diesen Kontakt"
-                        value={notificationMuteSelectValue(selectedPeer.contact)}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v === 'timed') return;
-                          applyNotificationMute(selectedPeer.id, v);
-                        }}
-                        style={{
-                          width: 'auto',
-                          maxWidth: 220,
-                          padding: '6px 28px 6px 10px',
-                          fontSize: 12,
-                        }}
-                      >
-                        <option value="off">Mitteilungen ein</option>
-                        {notificationMuteSelectValue(selectedPeer.contact) === 'timed' &&
-                        typeof selectedPeer.contact?.notifyMutedUntil === 'number' ? (
-                          <option value="timed">
-                            Stumm bis {formatMuteExpiry(selectedPeer.contact.notifyMutedUntil)}
-                          </option>
-                        ) : null}
-                        <option value="1h">1 Stunde stumm</option>
-                        <option value="8h">8 Stunden stumm</option>
-                        <option value="24h">24 Stunden stumm</option>
-                        <option value="manual">Stumm bis manuell aktivieren</option>
-                      </select>
-                    </div>
-                  ) : null}
                   <button
                     type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => {
-                      if (!selectedPeer) return;
-                      const next = !selectedPeer.contact?.blocked;
-                      setContactBlocked(selectedPeer.id, next);
-                      toast({
-                        variant: 'success',
-                        title: next ? 'Contact blocked' : 'Contact unblocked',
-                        message: next
-                          ? 'They no longer appear in your chat list and cannot message you.'
-                          : 'You can chat with them again from New connections or by reconnecting.',
-                      });
-                    }}
-                    title={selectedPeer.contact?.blocked ? 'Unblock contact' : 'Block contact'}
-                  >
-                    <Ban size={14} strokeWidth={CHAT_ICON_STROKE} aria-hidden style={{ marginRight: 4 }} />
-                    {selectedPeer.contact?.blocked ? 'Unblock' : 'Block'}
-                  </button>
-                  <button className="btn btn-secondary btn-sm" onClick={openNicknameDialog}>
-                    Nickname
-                  </button>
-                  <button
                     className="btn btn-secondary btn-icon"
-                    onClick={togglePinnedState}
-                    title={selectedPeer.pinned ? 'Chat lösen' : 'Chat anheften'}
+                    ref={chatActionsMenuBtnRef}
+                    aria-label="Chat-Aktionen"
+                    aria-expanded={chatActionsMenuOpen}
+                    aria-haspopup="menu"
+                    title="Chat-Aktionen"
+                    onClick={() => setChatActionsMenuOpen((o) => !o)}
                   >
-                    {selectedPeer.pinned ? (
-                      <PinOff size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                    ) : (
-                      <Pin size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                    <MoreVertical size={18} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                  </button>
+                  {chatActionsMenuOpen &&
+                    createPortal(
+                      <div
+                        ref={chatActionsMenuPanelRef}
+                        className="chat-list-context-menu chat-header-peer-menu animate-scale"
+                        role="menu"
+                        style={{
+                          position: 'fixed',
+                          top: chatMenuPosition.top,
+                          left: chatMenuPosition.left,
+                          zIndex: 1250,
+                          maxHeight: 'min(420px, calc(100vh - 24px))',
+                          overflowY: 'auto',
+                        }}
+                      >
+                      <button
+                        type="button"
+                        className="chat-list-context-menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          if (!selectedPeer) return;
+                          const on = contactE2eePreferenceOn(selectedPeer.contact);
+                          const next = !on;
+                          setContactE2eeEnabled(selectedPeer.id, next);
+                          toast({
+                            variant: 'success',
+                            title: next ? 'E2EE aktiv' : 'E2EE aus',
+                            message: next
+                              ? 'Ausgehende Nachrichten werden wieder verschlüsselt, sobald eine Sitzung besteht.'
+                              : 'Ausgehende Nachrichten gehen unverschlüsselt; eingehende E2EE-Nachrichten werden weiter entschlüsselt.',
+                          });
+                          setChatActionsMenuOpen(false);
+                        }}
+                      >
+                        {contactE2eePreferenceOn(selectedPeer.contact) ? (
+                          <Unlock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        ) : (
+                          <Lock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        )}
+                        {contactE2eePreferenceOn(selectedPeer.contact)
+                          ? 'E2EE deaktivieren (Klartext)'
+                          : 'E2EE aktivieren'}
+                      </button>
+                      {contactNotificationMuteOn && !selectedPeer.contact?.blocked ? (
+                        <>
+                          {isContactNotificationMuted(selectedPeer.contact) ? (
+                            <button
+                              type="button"
+                              className="chat-list-context-menu-item"
+                              role="menuitem"
+                              onClick={() => {
+                                applyNotificationMute(selectedPeer.id, 'off');
+                                setChatActionsMenuOpen(false);
+                              }}
+                            >
+                              <Bell size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                              Mitteilungen ein
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="chat-list-context-menu-item"
+                            role="menuitem"
+                            onClick={() => {
+                              applyNotificationMute(selectedPeer.id, '1h');
+                              setChatActionsMenuOpen(false);
+                            }}
+                          >
+                            <Bell size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                            1 Std. Mitteilungen stumm
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-list-context-menu-item"
+                            role="menuitem"
+                            onClick={() => {
+                              applyNotificationMute(selectedPeer.id, '8h');
+                              setChatActionsMenuOpen(false);
+                            }}
+                          >
+                            <Bell size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                            8 Std. Mitteilungen stumm
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-list-context-menu-item"
+                            role="menuitem"
+                            onClick={() => {
+                              applyNotificationMute(selectedPeer.id, '24h');
+                              setChatActionsMenuOpen(false);
+                            }}
+                          >
+                            <Bell size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                            24 Std. Mitteilungen stumm
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-list-context-menu-item"
+                            role="menuitem"
+                            onClick={() => {
+                              applyNotificationMute(selectedPeer.id, 'manual');
+                              setChatActionsMenuOpen(false);
+                            }}
+                          >
+                            <Bell size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                            Mitteilungen stumm bis manuell ein
+                          </button>
+                          {notificationMuteSelectValue(selectedPeer.contact) === 'timed' &&
+                          typeof selectedPeer.contact?.notifyMutedUntil === 'number' ? (
+                            <div className="chat-header-peer-menu-hint text-xs text-muted">
+                              Stumm bis {formatMuteExpiry(selectedPeer.contact.notifyMutedUntil)}
+                            </div>
+                          ) : null}
+                          <div className="chat-list-context-menu-sep" role="separator" />
+                        </>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="chat-list-context-menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          if (!selectedPeer) return;
+                          const next = !selectedPeer.contact?.blocked;
+                          setContactBlocked(selectedPeer.id, next);
+                          toast({
+                            variant: 'success',
+                            title: next ? 'Contact blocked' : 'Contact unblocked',
+                            message: next
+                              ? 'They no longer appear in your chat list and cannot message you.'
+                              : 'You can chat with them again from New connections or by reconnecting.',
+                          });
+                          setChatActionsMenuOpen(false);
+                        }}
+                      >
+                        <Ban size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        {selectedPeer.contact?.blocked ? 'Entblocken' : 'Blockieren'}
+                      </button>
+                      <button type="button" className="chat-list-context-menu-item" role="menuitem" onClick={openNicknameDialog}>
+                        <Pencil size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        Spitzname…
+                      </button>
+                      <button type="button" className="chat-list-context-menu-item" role="menuitem" onClick={togglePinnedState}>
+                        {selectedPeer.pinned ? (
+                          <PinOff size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        ) : (
+                          <Pin size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        )}
+                        {selectedPeer.pinned ? 'Chat lösen' : 'Chat anheften'}
+                      </button>
+                      <button
+                        type="button"
+                        className="chat-list-context-menu-item"
+                        role="menuitem"
+                        onClick={() => {
+                          void copyPeerIdFromMenu(selectedPeer.id);
+                          setChatActionsMenuOpen(false);
+                        }}
+                      >
+                        <Copy size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        Peer-ID kopieren
+                      </button>
+                      <div className="chat-list-context-menu-sep" role="separator" />
+                      <button
+                        type="button"
+                        className="chat-list-context-menu-item chat-list-context-menu-item--danger"
+                        role="menuitem"
+                        onClick={() => openDeleteForPeer(selectedPeer.id)}
+                      >
+                        <Trash2 size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+                        Chat löschen…
+                      </button>
+                      </div>,
+                      document.body
                     )}
-                  </button>
-                  <button
-                    className="btn btn-danger btn-icon"
-                    onClick={() => openDeleteForPeer(selectedPeer.id)}
-                    title="Chat löschen"
-                  >
-                    <Trash2 size={16} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-                  </button>
                 </div>
               </div>
 
@@ -1577,8 +1691,8 @@ export default function ChatsPage() {
                 )}
                 {!selectedPeer.contact?.blocked && selectedPeer.contact?.blockedByPeer && (
                   <div className="chat-warning" role="status">
-                    Dieser Kontakt hat dich blockiert. Du kannst keine Nachrichten senden; der Kontakt erhält deine
-                    Nachrichten nicht.
+                    Du wurdest zuletzt beim Senden blockiert. Wenn der Kontakt die Sperre aufhebt, gehen Nachrichten
+                    wieder durch – einfach erneut senden.
                   </div>
                 )}
                 {contactNotificationMuteOn &&
@@ -1601,18 +1715,7 @@ export default function ChatsPage() {
                       )}
                     </div>
                   )}
-                {!selectedPeer.contact?.blocked &&
-                  !selectedPeer.contact?.blockedByPeer &&
-                  !e2eeFeatureFlagOn && (
-                  <div className="chat-notice-muted" role="status">
-                    Ausgehende Ende-zu-Ende-Verschlüsselung ist app-weit unter Feature-Flags deaktiviert. Eingehende
-                    E2EE-Nachrichten werden weiterhin entschlüsselt.
-                  </div>
-                )}
-                {!selectedPeer.contact?.blocked &&
-                  !selectedPeer.contact?.blockedByPeer &&
-                  e2eeFeatureFlagOn &&
-                  !contactE2eePreferenceOn(selectedPeer.contact) && (
+                {!selectedPeer.contact?.blocked && !contactE2eePreferenceOn(selectedPeer.contact) && (
                   <div className="chat-notice-muted" role="status">
                     Ausgehende Nachrichten in diesem Chat sind unverschlüsselt. Eingehende verschlüsselte Nachrichten
                     werden weiterhin entschlüsselt.
@@ -1809,13 +1912,11 @@ export default function ChatsPage() {
                     placeholder={
                       selectedPeer.contact?.blocked
                         ? 'Unblock to send messages…'
-                        : selectedPeer.contact?.blockedByPeer
-                          ? 'Du wurdest blockiert – Senden nicht möglich …'
-                          : showOfflineComposerReconnect
-                            ? 'Warte auf Verbindung …'
-                            : readingFile
-                              ? 'Reading file…'
-                              : 'Type a message… (Markdown supported)'
+                        : showOfflineComposerReconnect
+                          ? 'Warte auf Verbindung …'
+                          : readingFile
+                            ? 'Reading file…'
+                            : 'Type a message… (Markdown supported)'
                     }
                     rows={1}
                     disabled={Boolean(
@@ -1919,10 +2020,7 @@ export default function ChatsPage() {
                       : selectedPeer.offline
                         ? 'Offline'
                         : 'Online'}
-                  {e2eeFeatureFlagOn && !contactE2eePreferenceOn(selectedPeer.contact)
-                    ? ' · Ausgehend ohne E2EE'
-                    : ''}
-                  {!e2eeFeatureFlagOn ? ' · E2EE app-weit aus (Feature-Flag)' : ''}
+                  {!contactE2eePreferenceOn(selectedPeer.contact) ? ' · Ausgehend ohne E2EE' : ''}
                 </span>
               </div>
               <div className="peer-profile-field">
@@ -2091,32 +2189,30 @@ export default function ChatsPage() {
             )}
             {listContextMenu.chat.pinned ? 'Chat lösen' : 'Chat anheften'}
           </button>
-          {e2eeFeatureFlagOn ? (
-            <button
-              type="button"
-              className="chat-list-context-menu-item"
-              role="menuitem"
-              onClick={() => {
-                const id = listContextMenu.chat.id;
-                const on = contactE2eePreferenceOn(listContextMenu.chat.contact);
-                setContactE2eeEnabled(id, !on);
-                toast({
-                  variant: 'success',
-                  title: !on ? 'E2EE aktiv' : 'E2EE aus',
-                });
-                closeListContextMenu();
-              }}
-            >
-              {contactE2eePreferenceOn(listContextMenu.chat.contact) ? (
-                <Unlock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-              ) : (
-                <Lock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
-              )}
-              {contactE2eePreferenceOn(listContextMenu.chat.contact)
-                ? 'E2EE deaktivieren (Klartext)'
-                : 'E2EE aktivieren'}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="chat-list-context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              const id = listContextMenu.chat.id;
+              const on = contactE2eePreferenceOn(listContextMenu.chat.contact);
+              setContactE2eeEnabled(id, !on);
+              toast({
+                variant: 'success',
+                title: !on ? 'E2EE aktiv' : 'E2EE aus',
+              });
+              closeListContextMenu();
+            }}
+          >
+            {contactE2eePreferenceOn(listContextMenu.chat.contact) ? (
+              <Unlock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            ) : (
+              <Lock size={15} strokeWidth={CHAT_ICON_STROKE} aria-hidden />
+            )}
+            {contactE2eePreferenceOn(listContextMenu.chat.contact)
+              ? 'E2EE deaktivieren (Klartext)'
+              : 'E2EE aktivieren'}
+          </button>
           {contactNotificationMuteOn && !listContextMenu.chat.contact?.blocked ? (
             <>
               {isContactNotificationMuted(listContextMenu.chat.contact) ? (

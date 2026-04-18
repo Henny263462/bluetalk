@@ -3,6 +3,13 @@
  * When you ship a new version, add a matching key here (same as package.json version).
  */
 const RELEASE_NOTES = {
+  '1.1.6': {
+    title: "What's new in BlueTalk 1.1.6",
+    items: [
+      'Mehrere bisherige Feature-Flags sind jetzt fest eingebaut: flüssiger Versand (startTransition), schnelleres Datei-Einlesen (Data-URL), ausgehende Dateien erst nach erfolgreichem Senden auf die Platte, Ende-zu-Ende-Verschlüsselung pro Kontakt ohne globalen Master-Schalter, und deckende Toasts unten rechts.',
+      'E2EE-Menü und Hinweise erscheinen immer; der globale „E2EE aus (Feature-Flag)“-Zustand entfällt.',
+    ],
+  },
   '1.1.5': {
     title: "What's new in BlueTalk 1.1.5",
     items: [

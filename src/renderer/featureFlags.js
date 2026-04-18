@@ -3,45 +3,10 @@
  */
 export const FEATURE_FLAG_DEFINITIONS = [
   {
-    id: 'smoothChatSend',
-    label: 'Flüssiger Chat-Versand',
-    description:
-      'Aktualisiert den Verlauf mit niedriger Priorität (React startTransition), damit Tippen und Scrollen beim Senden weniger ruckeln.',
-    defaultEnabled: true,
-  },
-  {
-    id: 'fastFileRead',
-    label: 'Schnelleres Einlesen von Dateien',
-    description:
-      'Nutzt den nativen Data-URL-Pfad des Browsers beim Lesen großer Dateien statt manueller Base64-Konvertierung — oft spürbar schneller und weniger CPU-lastig.',
-    defaultEnabled: true,
-  },
-  {
-    id: 'deferFileDiskAfterSend',
-    label: 'Datei erst senden, dann lokal speichern',
-    description:
-      'Schreibt ausgehende Dateianhänge erst nach erfolgreichem Versand in die lokale Chat-Datei, statt parallel zu Netzwerk und Verschlüsselung. Reduziert Lastspitzen bei großen Dateien.',
-    defaultEnabled: true,
-  },
-  {
     id: 'chatUnreadListBadges',
     label: 'Ungelesen in der Chat-Liste',
     description:
       'Zeigt in der Chat-Liste einen Hinweis und eine Zahl (1–9, ab 10 als „9+“), wenn seit dem letzten Öffnen des Chats neue Nachrichten vom Peer eingegangen sind.',
-    defaultEnabled: false,
-  },
-  {
-    id: 'e2eeEncryption',
-    label: 'Ende-zu-Ende-Verschlüsselung (ausgehend)',
-    description:
-      'Master-Schalter: Wenn aus, werden alle ausgehenden Chat- und Dateinachrichten unverschlüsselt gesendet; die Schloss-Steuerung pro Chat hat dann keine Wirkung. Wenn an, ist Verschlüsselung Standard und kann pro Chat im Gespräch deaktiviert werden (Klartext ausgehend). Eingehende E2EE-Nachrichten werden weiter entschlüsselt.',
-    defaultEnabled: true,
-  },
-  {
-    id: 'solidBottomRightToasts',
-    label: 'Toasts unten rechts (deckend)',
-    description:
-      'Zeigt Benachrichtigungen unten rechts mit undurchsichtigem, einfarbigem Hintergrund pro Typ (keine transparenten Weichzeichner-Farben). Unten links bleibt das bisherige Erscheinungsbild.',
     defaultEnabled: false,
   },
   {

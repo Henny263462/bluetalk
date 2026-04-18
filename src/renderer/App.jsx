@@ -82,11 +82,8 @@ async function persistE2eeSessionsMap(sessionsRef) {
   window.bluetalk.store.set('e2eeSessions', out);
 }
 
-/**
- * Ausgehende E2EE nur wenn Feature-Flag `e2eeEncryption` an ist und der Kontakt nicht `e2eeEnabled: false` gesetzt hat.
- */
-function contactWantsOutgoingE2ee(settingsRef, contactsRef, peerId) {
-  if (!getEffectiveFlag(settingsRef.current, 'e2eeEncryption')) return false;
+/** Ausgehende E2EE, sofern der Kontakt nicht explizit `e2eeEnabled: false` hat. */
+function contactWantsOutgoingE2ee(contactsRef, peerId) {
   if (!peerId) return true;
   const c = contactsRef.current.find((x) => x?.id === peerId);
   if (c?.e2eeEnabled === false) return false;
@@ -374,7 +371,7 @@ export default function App() {
             const peerList = await window.bluetalk.peer.getPeers();
             for (const p of peerList || []) {
               if (!p?.id) continue;
-              if (!contactWantsOutgoingE2ee(settingsRef, contactsRef, p.id)) continue;
+              if (!contactWantsOutgoingE2ee(contactsRef, p.id)) continue;
               if (contactsRef.current.some((c) => c?.id === p.id && c.blocked === true)) continue;
               void window.bluetalk.peer.send(p.id, {
                 kind: 'e2ee-key-handshake',
@@ -485,7 +482,7 @@ export default function App() {
         });
 
         const blocked = contactsRef.current.some((c) => c?.id === peer.id && c.blocked === true);
-        if (!blocked && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(settingsRef, contactsRef, peer.id)) {
+        if (!blocked && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(contactsRef, peer.id)) {
           void window.bluetalk.peer.send(peer.id, {
             kind: 'e2ee-key-handshake',
             publicSpkiB64: ownEcdhPublicSpkiRef.current,
@@ -834,10 +831,6 @@ export default function App() {
       return Promise.resolve(false);
     }
 
-    if (contactsRef.current.some((c) => c?.id === peerId && c.blockedByPeer === true)) {
-      return Promise.resolve(false);
-    }
-
     const outgoing = typeof payload === 'string'
       ? { kind: 'chat', content: payload }
       : { kind: 'chat', ...payload };
@@ -896,11 +889,7 @@ export default function App() {
       upsertContact({ id: peerId, hasOutgoing: true, pendingMessageRequest: false });
     };
 
-    if (getEffectiveFlag(settingsRef.current, 'smoothChatSend')) {
-      startTransition(flushOptimistic);
-    } else {
-      flushOptimistic();
-    }
+    startTransition(flushOptimistic);
 
     const sendPromise = (async () => {
       const revokePreview = () => {
@@ -919,7 +908,7 @@ export default function App() {
       };
 
       let wirePayload = innerPlain;
-      if (contactWantsOutgoingE2ee(settingsRef, contactsRef, peerId)) {
+      if (contactWantsOutgoingE2ee(contactsRef, peerId)) {
         let session = e2eeSessionsRef.current[peerId];
         if (!session?.aesKey && ownEcdhPublicSpkiRef.current) {
           void window.bluetalk.peer.send(peerId, {
@@ -956,7 +945,7 @@ export default function App() {
       };
 
       const isFile = innerPlain.kind === 'file';
-      const deferDisk = isFile && getEffectiveFlag(settingsRef.current, 'deferFileDiskAfterSend');
+      const deferDisk = isFile;
 
       try {
         let sent;
@@ -1106,7 +1095,7 @@ export default function App() {
       delete next[contactId];
       e2eeSessionsRef.current = next;
       void persistE2eeSessionsMap(e2eeSessionsRef);
-    } else if (window.bluetalk && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(settingsRef, contactsRef, contactId)) {
+    } else if (window.bluetalk && ownEcdhPublicSpkiRef.current && contactWantsOutgoingE2ee(contactsRef, contactId)) {
       void window.bluetalk.peer.send(contactId, {
         kind: 'e2ee-key-handshake',
         publicSpkiB64: ownEcdhPublicSpkiRef.current,
@@ -1285,7 +1274,7 @@ export default function App() {
   if (!window.bluetalk) {
     return (
       <AppContext.Provider value={ctx}>
-        <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
+        <ToastProvider solidBottomRight>
           <InboundToastBridge toastRef={inboundToastRef} />
           <RuntimeUnavailablePage />
         </ToastProvider>
@@ -1295,7 +1284,7 @@ export default function App() {
 
   return (
     <AppContext.Provider value={ctx}>
-      <ToastProvider solidBottomRight={getEffectiveFlag(settings, 'solidBottomRightToasts')}>
+      <ToastProvider solidBottomRight>
         <ErrorBoundary>
           <HashRouter>
             <InboundToastBridge toastRef={inboundToastRef} />
