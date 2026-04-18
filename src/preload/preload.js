@@ -71,6 +71,26 @@ contextBridge.exposeInMainWorld('bluetalk', {
     install: () => ipcRenderer.invoke('updater:install'),
   },
 
+  /** Poker-Spiel-Fenster: Zustand vom Hauptfenster, Aktionen zurück zum Plugin */
+  poker: {
+    openGameWindow: () => ipcRenderer.invoke('poker:openGameWindow'),
+    closeGameWindow: () => ipcRenderer.invoke('poker:closeGameWindow'),
+    pushState: (payload) => ipcRenderer.send('poker:pumpState', payload),
+    sendAction: (payload) => ipcRenderer.send('poker:fromChild', payload),
+    onState: (callback) => {
+      if (typeof callback !== 'function') return () => undefined;
+      const listener = (_, data) => callback(data);
+      ipcRenderer.on('poker:state', listener);
+      return () => ipcRenderer.removeListener('poker:state', listener);
+    },
+    onFromChild: (callback) => {
+      if (typeof callback !== 'function') return () => undefined;
+      const listener = (_, data) => callback(data);
+      ipcRenderer.on('poker:fromChild', listener);
+      return () => ipcRenderer.removeListener('poker:fromChild', listener);
+    },
+  },
+
   app: {
     clearCache: () => ipcRenderer.invoke('app:clearCache'),
     clearMessages: () => ipcRenderer.invoke('app:clearMessages'),

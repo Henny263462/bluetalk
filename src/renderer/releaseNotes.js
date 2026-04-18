@@ -3,6 +3,13 @@
  * When you ship a new version, add a matching key here (same as package.json version).
  */
 const RELEASE_NOTES = {
+  '1.1.7': {
+    title: "What's new in BlueTalk 1.1.7",
+    items: [
+      'Poker-Plugin (Texas Hold’em): Tisch hosten, Einladungen per Chat, Spiel im eigenen Fenster; im Debug-Modus kann der Host einen Test-Bot hinzufügen.',
+      'Korrektur: Eigene Peer-ID wird asynchron geladen — Host-Erkennung und Debug-Bot funktionieren zuverlässig.',
+    ],
+  },
   '1.1.6': {
     title: "What's new in BlueTalk 1.1.6",
     items: [

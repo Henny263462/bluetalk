@@ -16,6 +16,7 @@ import ProfileMenu from './components/ProfileMenu';
 import { ToastProvider, useToast } from './components/ToastProvider';
 import PluginTabView from './plugins/PluginTabView';
 import PluginScreenHost from './plugins/PluginScreenHost';
+import PokerGamePage from './pages/PokerGamePage';
 import { pluginRuntime } from './plugins/pluginRuntime';
 import ErrorBoundary from './components/ErrorBoundary';
 import VersionWelcomeModal from './components/VersionWelcomeModal';
@@ -575,9 +576,16 @@ export default function App() {
           return;
         }
 
+        // Poker-Spielprotokoll (Wire) — nicht im Chatverlauf speichern
+        if (msg.kind === 'poker' && fromId) {
+          if (isBlocked) return;
+          return;
+        }
+
         if (isBlocked) {
           const k = msg.kind;
-          const blockable = k === 'chat' || k === 'file' || k === 'encrypted-chat-e2ee';
+          const blockable =
+            k === 'chat' || k === 'file' || k === 'encrypted-chat-e2ee' || k === 'poker-invite';
           if (blockable && fromId && msg.messageId) {
             void window.bluetalk.peer.send(fromId, {
               kind: 'messaging-blocked',
@@ -1286,9 +1294,14 @@ export default function App() {
     <AppContext.Provider value={ctx}>
       <ToastProvider solidBottomRight>
         <ErrorBoundary>
-          <HashRouter>
+            <HashRouter>
             <InboundToastBridge toastRef={inboundToastRef} />
             <PluginRuntimeToastBridge />
+            <Routes>
+              <Route path="/poker-game" element={<PokerGamePage />} />
+              <Route
+                path="*"
+                element={(
             <div className="app">
               <UsernameOnboardingModal
                 open={showUsernameOnboarding}
@@ -1325,6 +1338,9 @@ export default function App() {
               </div>
               <PluginScreenHost />
             </div>
+                )}
+              />
+            </Routes>
           </HashRouter>
         </ErrorBoundary>
       </ToastProvider>

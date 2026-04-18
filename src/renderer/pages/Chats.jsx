@@ -134,6 +134,9 @@ const CHAT_LIST_WIDTH_MAX = 560;
 function getLastPreview(message) {
   if (!message) return 'No messages';
   if (message.kind === 'file') return `File: ${message.fileName || message.content || 'Attachment'}`;
+  if (message.kind === 'poker-invite') {
+    return `${message.from === 'self' ? 'Du: ' : ''}Poker: ${message.tableName || 'Einladung'}`;
+  }
   return (message.from === 'self' ? 'You: ' : '') + (message.content || 'Message');
 }
 
@@ -517,6 +520,48 @@ function MarkdownBody({ text }) {
       >
         {text}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+function PokerInviteMessage({ message }) {
+  const navigate = useNavigate();
+  const tableName = message.tableName || 'Poker-Tisch';
+  const summary = message.pokerSettingsSummary || message.content || '';
+  return (
+    <div className="poker-invite-card" role="group" aria-label="Poker-Einladung">
+      <div className="poker-invite-card-head">
+        <span className="poker-invite-card-icon" aria-hidden>
+          ♠
+        </span>
+        <div>
+          <div className="poker-invite-card-title">{tableName}</div>
+          {summary ? <div className="poker-invite-card-meta">{summary}</div> : null}
+        </div>
+      </div>
+      <p className="poker-invite-card-hint">Einladung zum gemeinsamen Texas Hold&apos;em (Peer-to-Peer).</p>
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm poker-invite-card-btn"
+        onClick={() => {
+          try {
+            sessionStorage.setItem(
+              'bt.poker.pendingJoin',
+              JSON.stringify({
+                hostPeerId: message.hostPeerId,
+                tableId: message.tableId,
+                tableName,
+                pokerSettings: message.pokerSettings || {},
+              })
+            );
+          } catch {
+            /* ignore */
+          }
+          navigate(`/plugin/${encodeURIComponent('poker:table')}`);
+        }}
+      >
+        Tisch beitreten
+      </button>
     </div>
   );
 }
@@ -1777,6 +1822,8 @@ export default function ChatsPage() {
                             onExpandImage={setMediaLightbox}
                             onSaveToDisk={saveFileMessage}
                           />
+                        ) : m.kind === 'poker-invite' ? (
+                          <PokerInviteMessage message={m} />
                         ) : (
                           <ChatMessage message={m} onExpandImage={setMediaLightbox} />
                         )}

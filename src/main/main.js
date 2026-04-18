@@ -3,12 +3,15 @@ const fs = require('fs/promises');
 const { autoUpdater } = require('electron-updater');
 const net = require('net');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { PeerServer, normalizeConnectAddress } = require(path.join(__dirname, '..', 'shared', 'peer-server.js'));
 const { APIServer } = require(path.join(__dirname, '..', 'shared', 'api-server.js'));
 const Store = require(path.join(__dirname, '..', 'shared', 'store.js'));
 const { PluginHost } = require(path.join(__dirname, 'plugin-host.js'));
 
 let mainWindow = null;
+/** Separates Fenster für das Poker-Plugin (Spieltisch). */
+let pokerGameWindow = null;
 let tray = null;
 let peerServer = null;
 let apiServer = null;
@@ -752,7 +755,9 @@ function queueIncomingChatNotification(data) {
       ? 'New encrypted message'
       : data.kind === 'file'
         ? `File: ${data.fileName || data.content || 'Attachment'}`
-        : (data.content || 'New message');
+        : data.kind === 'poker-invite'
+          ? `Poker: ${data.tableName || 'Einladung'}`
+          : (data.content || 'New message');
 
   if (incomingNotifBatch.senderLabel !== senderLabel) {
     flushIncomingNotificationBatch();
@@ -858,6 +863,56 @@ function createWindow() {
   return mainWindow;
 }
 
+function createPokerGameWindow() {
+  if (pokerGameWindow && !pokerGameWindow.isDestroyed()) {
+    try {
+      pokerGameWindow.focus();
+    } catch {
+      /* ignore */
+    }
+    return pokerGameWindow;
+  }
+
+  pokerGameWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
+    frame: false,
+    transparent: false,
+    backgroundColor: '#071018',
+    icon: createAppIcon(256),
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+    show: false,
+  });
+
+  if (isDev) {
+    pokerGameWindow.loadURL('http://localhost:5173/#/poker-game');
+  } else {
+    const indexHtml = path.join(__dirname, '..', '..', 'dist', 'index.html');
+    pokerGameWindow.loadURL(`${pathToFileURL(indexHtml).href}#/poker-game`);
+  }
+
+  pokerGameWindow.once('ready-to-show', () => {
+    try {
+      pokerGameWindow?.show();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  pokerGameWindow.on('closed', () => {
+    pokerGameWindow = null;
+  });
+
+  return pokerGameWindow;
+}
+
 function createTray() {
   tray = new Tray(createAppIcon(32));
   const contextMenu = Menu.buildFromTemplate([
@@ -941,6 +996,49 @@ function setupIPC() {
   });
   ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
   ipcMain.handle('window:close', () => mainWindow?.close());
+
+  ipcMain.handle('poker:openGameWindow', () => {
+    try {
+      createPokerGameWindow();
+      return { ok: true };
+    } catch (e) {
+      console.error('[Poker] open window:', e);
+      return { ok: false, error: e?.message || 'open_failed' };
+    }
+  });
+
+  ipcMain.handle('poker:closeGameWindow', () => {
+    try {
+      if (pokerGameWindow && !pokerGameWindow.isDestroyed()) {
+        pokerGameWindow.close();
+      }
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'close_failed' };
+    }
+  });
+
+  ipcMain.on('poker:pumpState', (event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (event.sender !== mainWindow.webContents) return;
+    if (!pokerGameWindow || pokerGameWindow.isDestroyed()) return;
+    try {
+      pokerGameWindow.webContents.send('poker:state', payload);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  ipcMain.on('poker:fromChild', (event, payload) => {
+    if (!pokerGameWindow || pokerGameWindow.isDestroyed()) return;
+    if (event.sender !== pokerGameWindow.webContents) return;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      mainWindow.webContents.send('poker:fromChild', payload);
+    } catch {
+      /* ignore */
+    }
+  });
 
   ipcMain.handle('store:get', (_, key, defaultVal) => store.get(key, defaultVal));
   ipcMain.handle('store:set', (_, key, value) => {
@@ -1163,7 +1261,12 @@ function setupIPC() {
   for (const event of forwardEvents) {
     peerServer.on(event, (data) => {
       if (event === 'peer:message' && data?.from !== 'self' && data?.kind !== 'profile') {
-        if (data.kind !== 'delivery-receipt' && data.kind !== 'read-receipt' && data.kind !== 'messaging-blocked') {
+        if (
+          data.kind !== 'delivery-receipt'
+          && data.kind !== 'read-receipt'
+          && data.kind !== 'messaging-blocked'
+          && data.kind !== 'poker'
+        ) {
           if (!isContactBlockedInStore(data.from) && !isContactNotificationMutedInStore(data.from)) {
             queueIncomingChatNotification(data);
           }
@@ -1224,6 +1327,14 @@ if (!gotSingleInstanceLock) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  try {
+    if (pokerGameWindow && !pokerGameWindow.isDestroyed()) {
+      pokerGameWindow.destroy();
+      pokerGameWindow = null;
+    }
+  } catch {
+    /* ignore */
+  }
 });
 
 app.on('window-all-closed', () => {
