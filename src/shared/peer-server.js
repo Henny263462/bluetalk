@@ -952,7 +952,12 @@ class PeerServer extends EventEmitter {
   _wsSend(socket, data) {
     try {
       if (!socket || socket.destroyed || !socket.writable) return false;
-      socket.write(this._encodeFrame(data));
+      const frame = this._encodeFrame(data);
+      if (frame.length > MAX_WEBSOCKET_PAYLOAD_BYTES + 14) {
+        console.error('[PeerServer] Payload too large');
+        return false;
+      }
+      socket.write(frame);
       return true;
     } catch (e) {
       console.error('[PeerServer] Send error:', e.message);
@@ -962,13 +967,18 @@ class PeerServer extends EventEmitter {
 
   sendTo(peerId, data) {
     const peer = this.peers.get(peerId);
-    if (!peer) return false;
+    if (!peer || !peer.socket) return false;
     const ts = typeof data?.timestamp === 'number' && Number.isFinite(data.timestamp) ? data.timestamp : Date.now();
-    return this._wsSend(peer.socket, JSON.stringify({
+    const payload = JSON.stringify({
       type: 'message',
       ...data,
       timestamp: ts,
-    }));
+    });
+    const sent = this._wsSend(peer.socket, payload);
+    if (!sent) {
+      this._cleanupDeadPeer(peerId);
+    }
+    return sent;
   }
 
   broadcast(data) {
@@ -978,8 +988,25 @@ class PeerServer extends EventEmitter {
       ...data,
       timestamp: ts,
     });
-    for (const [, peer] of this.peers) {
-      this._wsSend(peer.socket, payload);
+    const results = [];
+    for (const [id, peer] of this.peers) {
+      const sent = this._wsSend(peer.socket, payload);
+      if (!sent) {
+        this._cleanupDeadPeer(id);
+      }
+      results.push({ peerId: id, sent });
+    }
+    return results;
+  }
+
+  _cleanupDeadPeer(peerId) {
+    const peer = this.peers.get(peerId);
+    if (peer) {
+      try {
+        peer.socket.destroy();
+      } catch {}
+      this.peers.delete(peerId);
+      this.emit('peer:disconnected', peerId);
     }
   }
 
@@ -1093,12 +1120,30 @@ class PeerServer extends EventEmitter {
    * Does not start listeners; call start() afterwards.
    */
   reloadIdentityFromStore() {
+    // Disconnect all peers before clearing state
+    for (const [id, peer] of this.peers) {
+      try {
+        this._sendWebSocketClose(peer.socket);
+        peer.socket.destroy();
+      } catch {}
+    }
+    this.peers.clear();
     this.id = this.store.get('peerId') || this._generateId();
     if (!this.store.get('peerId')) {
       this.store.set('peerId', this.id);
     }
     this.hostedFiles.clear();
     this.discoveredPeers.clear();
+    this._pendingConnections.clear();
+  }
+
+  _sendWebSocketClose(socket) {
+    try {
+      if (!socket || socket.destroyed || !socket.writable) return;
+      // WebSocket close frame: opcode 0x08
+      const closeFrame = Buffer.from([0x88, 0x00]);
+      socket.write(closeFrame);
+    } catch {}
   }
 
   /**
@@ -1116,11 +1161,13 @@ class PeerServer extends EventEmitter {
   /**
    * Close every active peer connection, then re-dial saved contacts and refresh LAN discovery.
    */
-  resetAllConnectionsAndReconnect() {
+  async resetAllConnectionsAndReconnect() {
     const ids = [...this.peers.keys()];
     for (const id of ids) {
       this.disconnectPeer(id);
     }
+    // Wait for sockets to fully close before reconnecting
+    await new Promise((resolve) => setTimeout(resolve, 500));
     this.reconnectContactsFromStore();
     this.refreshDiscovery();
   }
@@ -1132,15 +1179,21 @@ class PeerServer extends EventEmitter {
     }
     if (this.discoverySocket) {
       try {
+        this.discoverySocket.removeAllListeners();
         this.discoverySocket.close();
       } catch {}
+      this.discoverySocket = null;
     }
     for (const [, peer] of this.peers) {
-      peer.socket.destroy();
+      try {
+        this._sendWebSocketClose(peer.socket);
+        peer.socket.destroy();
+      } catch {}
     }
     this.peers.clear();
     for (const server of this.servers) {
       try {
+        server.removeAllListeners();
         server.close();
       } catch {}
     }

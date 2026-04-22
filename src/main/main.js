@@ -253,7 +253,8 @@ function configureAutoUpdater() {
 
   const prefs = getUpdaterPreferences();
   autoUpdater.autoDownload = prefs.autoDownloadUpdates;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // On Windows we use a custom quit handler; don't let electron-updater auto-install
+  autoUpdater.autoInstallOnAppQuit = process.platform !== 'win32';
   // Assisted NSIS (oneClick: false) needs /D for silent updates or the wizard asks for a path.
   if (process.platform === 'win32' && app.isPackaged) {
     autoUpdater.installDirectory = path.dirname(process.execPath);
@@ -378,10 +379,10 @@ function installPendingUpdateOnQuit(_event, exitCode) {
   if (autoUpdater.quitAndInstallCalled) return;
 
   try {
-    // Default electron-updater uses install(true, false) here — silent but no relaunch.
-    autoUpdater.install(true, true);
-  } catch (_err) {
-    /* ignore */
+    // Use quitAndInstall for proper update installation on quit
+    autoUpdater.quitAndInstall(true, true);
+  } catch (err) {
+    console.error('Failed to install update on quit:', err);
   }
 }
 
@@ -561,7 +562,10 @@ function handleSettingsMutation() {
   scheduleAutoUpdateChecks();
   applyLaunchAtLoginSetting();
   restartApiServerIfPortChanged();
-  peerServer?.reconnectContactsFromStore();
+  // Only reconnect if peer server is fully started
+  if (peerServer?.port > 0) {
+    peerServer.reconnectContactsFromStore();
+  }
 }
 
 async function readTailOfFile(filePath, maxBytes = 120_000) {
@@ -963,8 +967,10 @@ async function wipeAllLocalAppData() {
     return { ok: false, error: 'not_ready' };
   }
   try {
-    apiServer.stop();
+    await new Promise((resolve) => apiServer.stop(() => resolve()));
     peerServer.stop();
+    // Wait for sockets to fully close before restarting
+    await new Promise((resolve) => setTimeout(resolve, 500));
     await store.clearAll();
     peerServer.reloadIdentityFromStore();
     await peerServer.start();
@@ -1078,19 +1084,37 @@ function setupIPC() {
     return true;
   });
 
-  ipcMain.handle('peer:getInfo', () => peerServer.getInfo());
-  ipcMain.handle('peer:connect', (_, address) => peerServer.connectTo(address));
-  ipcMain.handle('peer:disconnect', (_, peerId) => peerServer.disconnectPeer(peerId));
-  ipcMain.handle('peer:send', (_, peerId, data) => peerServer.sendTo(peerId, data));
-  ipcMain.handle('peer:broadcast', (_, data) => peerServer.broadcast(data));
-  ipcMain.handle('peer:getPeers', () => peerServer.getPeers());
+  ipcMain.handle('peer:getInfo', () => peerServer?.getInfo() ?? { id: '', name: '', port: 0, ports: [], addresses: [], endpoints: [], peers: [], hostedFiles: [] });
+  ipcMain.handle('peer:connect', (_, address) => {
+    if (!peerServer) throw new Error('Peer server not ready');
+    return peerServer.connectTo(address);
+  });
+  ipcMain.handle('peer:disconnect', (_, peerId) => {
+    if (!peerServer) throw new Error('Peer server not ready');
+    return peerServer.disconnectPeer(peerId);
+  });
+  ipcMain.handle('peer:send', (_, peerId, data) => {
+    if (!peerServer) return false;
+    return peerServer.sendTo(peerId, data);
+  });
+  ipcMain.handle('peer:broadcast', (_, data) => {
+    if (!peerServer) return [];
+    return peerServer.broadcast(data);
+  });
+  ipcMain.handle('peer:getPeers', () => peerServer?.getPeers() ?? []);
   ipcMain.handle('peer:refreshDiscovery', () => {
-    peerServer.refreshDiscovery();
+    peerServer?.refreshDiscovery();
   });
 
-  ipcMain.handle('file:host', (_, fileMeta) => peerServer.hostFile(fileMeta));
-  ipcMain.handle('file:getHosted', () => peerServer.getHostedFiles());
-  ipcMain.handle('file:request', (_, peerId, fileId) => peerServer.requestFile(peerId, fileId));
+  ipcMain.handle('file:host', (_, fileMeta) => {
+    if (!peerServer) throw new Error('Peer server not ready');
+    return peerServer.hostFile(fileMeta);
+  });
+  ipcMain.handle('file:getHosted', () => peerServer?.getHostedFiles() ?? []);
+  ipcMain.handle('file:request', (_, peerId, fileId) => {
+    if (!peerServer) throw new Error('Peer server not ready');
+    return peerServer.requestFile(peerId, fileId);
+  });
   try {
     ipcMain.removeHandler('file:saveAs');
   } catch {
@@ -1277,7 +1301,13 @@ function setupIPC() {
           }
         }
       }
-      mainWindow?.webContents.send(event, data);
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(event, data);
+        }
+      } catch (e) {
+        console.warn(`[Main] Failed to forward event ${event}:`, e.message);
+      }
     });
   }
 }
@@ -1301,14 +1331,23 @@ if (!gotSingleInstanceLock) {
     applyLaunchAtLoginSetting();
 
     peerServer.start().then(() => {
-      // Proactively reconnect to all known contacts on startup
-      const contacts = store.get('contacts', []);
-      if (Array.isArray(contacts)) {
-        for (const contact of contacts) {
-          if (!contact?.id || !contact.address) continue;
-          peerServer.connectTo(contact.address).catch(() => {});
+      // Wait for discovery to be ready before reconnecting
+      setTimeout(() => {
+        // Proactively reconnect to all known contacts on startup
+        const contacts = store.get('contacts', []);
+        if (Array.isArray(contacts)) {
+          for (const contact of contacts) {
+            if (!contact?.id || !contact.address) continue;
+            // Skip if already connected (e.g. via discovery)
+            if (peerServer.peers.has(contact.id)) continue;
+            peerServer.connectTo(contact.address).catch((err) => {
+              console.warn(`[Startup] Reconnect to ${contact.address} failed:`, err.message);
+            });
+          }
         }
-      }
+      }, 1000);
+    }).catch((err) => {
+      console.error('[Startup] Peer server start failed:', err);
     });
     const initialApiPort = store.get('settings.apiPort', 19876);
     apiServer.start(initialApiPort);
@@ -1332,6 +1371,10 @@ if (!gotSingleInstanceLock) {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (updateCheckTimer) {
+    clearInterval(updateCheckTimer);
+    updateCheckTimer = null;
+  }
   try {
     if (pokerGameWindow && !pokerGameWindow.isDestroyed()) {
       pokerGameWindow.destroy();

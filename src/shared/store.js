@@ -37,7 +37,9 @@ class Store {
 
       try {
         await fs.promises.mkdir(path.dirname(this.path), { recursive: true });
-        await fs.promises.writeFile(this.path, JSON.stringify(this.data, null, 2), 'utf-8');
+        const tempPath = this.path + '.tmp';
+        await fs.promises.writeFile(tempPath, JSON.stringify(this.data, null, 2), 'utf-8');
+        await fs.promises.rename(tempPath, this.path);
       } catch (e) {
         console.error('Store save error:', e);
         // Mark dirty again so we retry on next schedule
@@ -99,7 +101,9 @@ class Store {
     this._dirty = false;
     try {
       await fs.promises.mkdir(path.dirname(this.path), { recursive: true });
-      await fs.promises.writeFile(this.path, '{}', 'utf-8');
+      const tempPath = this.path + '.tmp';
+      await fs.promises.writeFile(tempPath, '{}', 'utf-8');
+      await fs.promises.rename(tempPath, this.path);
     } catch (e) {
       console.error('Store clear error:', e);
       throw e;

@@ -18,11 +18,20 @@ class APIServer {
   }
 
   _setupEventForwarding() {
+    if (this._eventForwarders) {
+      // Remove old listeners if re-initializing
+      for (const [event, handler] of this._eventForwarders) {
+        this.peerServer.removeListener(event, handler);
+      }
+    }
+    this._eventForwarders = new Map();
     const events = ['peer:connected', 'peer:disconnected', 'peer:message', 'peer:file-offered', 'peer:file-received'];
     for (const event of events) {
-      this.peerServer.on(event, (data) => {
+      const handler = (data) => {
         this._broadcastSSE(event, data);
-      });
+      };
+      this._eventForwarders.set(event, handler);
+      this.peerServer.on(event, handler);
     }
   }
 

@@ -755,6 +755,9 @@ export default function App() {
     return () => {
       cancelled = true;
       unsubs.forEach((unsub) => unsub?.());
+      // Clear all delivery timers on unmount
+      deliveryTimersRef.current.forEach((tid) => clearTimeout(tid));
+      deliveryTimersRef.current.clear();
     };
   }, [upsertContact, applyMessagePatch]);
 
@@ -1020,13 +1023,16 @@ export default function App() {
     if (contactsRef.current.some((c) => c?.id === peerId && c.blocked === true)) return;
     if (!settings.sendReadReceipts) return;
     try {
-      await window.bluetalk.peer.send(peerId, {
+      const sent = await window.bluetalk.peer.send(peerId, {
         kind: 'read-receipt',
         lastReadMessageId,
         sender: settings.displayName,
       });
-    } catch {
-      /* ignore */
+      if (!sent) {
+        console.warn('[App] Read receipt failed to send to', peerId);
+      }
+    } catch (err) {
+      console.warn('[App] Read receipt error:', err.message);
     }
   }, [settings.displayName, settings.sendReadReceipts]);
 

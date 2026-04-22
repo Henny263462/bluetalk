@@ -1159,6 +1159,7 @@ export default function ChatsPage() {
         localPreviewUrl: file.objectUrl,
       }).then((ok) => {
         if (progressTimer) clearInterval(progressTimer);
+        progressTimer = null;
         if (!ok) {
           toast({ variant: 'error', title: 'File not sent', message: 'Peer is probably offline.' });
           setFileTransfer(null);
@@ -1168,6 +1169,7 @@ export default function ChatsPage() {
         setTimeout(() => setFileTransfer(null), 400);
       }).catch(() => {
         if (progressTimer) clearInterval(progressTimer);
+        progressTimer = null;
         setFileTransfer(null);
       });
     }
