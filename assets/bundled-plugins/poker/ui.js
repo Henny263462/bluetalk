@@ -196,6 +196,7 @@
     let winners = [];
     let message = '';
     let turnTimer = null;
+    let autoStartTimer = null;
 
     function peerIds() {
       return players.map((p) => p.peerId);
@@ -205,6 +206,24 @@
       if (turnTimer) {
         api.timer.clearTimeout(turnTimer);
         turnTimer = null;
+      }
+    }
+
+    function clearAutoStartTimer() {
+      if (autoStartTimer) {
+        api.timer.clearTimeout(autoStartTimer);
+        autoStartTimer = null;
+      }
+    }
+
+    function scheduleAutoStart() {
+      clearAutoStartTimer();
+      if (!cfg.autoStart || phase !== 'lobby') return;
+      const ready = players.filter((p) => p.chips > 0 && !p.isBot);
+      if (ready.length >= 2) {
+        autoStartTimer = api.timer.setTimeout(() => {
+          if (phase === 'lobby') startHand();
+        }, 5000);
       }
     }
 
@@ -294,6 +313,7 @@
       });
       players.sort((a, b) => a.seat - b.seat);
       message = `${name || peerId} ist am Tisch.`;
+      scheduleAutoStart();
       pushState();
       return true;
     }
@@ -445,6 +465,13 @@
       toActIdx = -1;
       message = 'Hand beendet.';
       pushState();
+      
+      // Auto-start nächste Hand nach 3 Sekunden
+      if (cfg.autoStart) {
+        api.timer.setTimeout(() => {
+          if (phase === 'between') startHand();
+        }, 3000);
+      }
     }
 
     function awardUncontested() {
@@ -459,6 +486,13 @@
       toActIdx = -1;
       message = `${w.name} gewinnt den Pot.`;
       pushState();
+      
+      // Auto-start nächste Hand nach 3 Sekunden
+      if (cfg.autoStart) {
+        api.timer.setTimeout(() => {
+          if (phase === 'between') startHand();
+        }, 3000);
+      }
       return true;
     }
 
@@ -471,6 +505,7 @@
         /* ignore */
       }
       clearTurnTimer();
+      clearAutoStartTimer();
       winners = [];
       const ready = players.filter((p) => p.chips > 0);
       if (ready.length < 2) {
@@ -735,6 +770,7 @@
       applyAction: (pid, a) => applyAction(pid, a),
       destroy() {
         clearTurnTimer();
+        clearAutoStartTimer();
       },
     };
   }
@@ -765,14 +801,14 @@
   function tryPump() {
     if (!window.bluetalk?.poker?.pushState) return;
     const pub = hostRef ? hostRef.publicState() : clientState;
-    if (!pub || pub.phase === 'lobby') return;
+    if (!pub) return;
     const hole = hostRef ? hostRef.getMyHole() : myHole;
     window.bluetalk.poker.pushState({ public: pub, myHole: hole });
   }
 
   async function openGameWindowIfNeeded() {
     const pub = hostRef ? hostRef.publicState() : clientState;
-    if (!pub || pub.phase === 'lobby') return;
+    if (!pub) return;
     try {
       await window.bluetalk?.poker?.openGameWindow?.();
     } catch {
@@ -946,6 +982,7 @@
           <div class="poker-field"><label>Start-Chips</label><input data-k="startingChips" type="number" value="${s.startingChips}" /></div>
           <div class="poker-field"><label>Max. Spieler</label><input data-k="maxPlayers" type="number" min="2" max="9" value="${s.maxPlayers}" /></div>
           <div class="poker-field"><label>Zugzeit (Sek., 0=aus)</label><input data-k="turnTimeSec" type="number" value="${s.turnTimeSec}" /></div>
+          <div class="poker-field"><label>Auto-Start</label><input data-k="autoStart" type="checkbox" ${s.autoStart ? 'checked' : ''} /></div>
         `;
         panels.querySelector('#poker-create').onclick = () => {
           void (async () => {
@@ -953,7 +990,7 @@
             const next = { ...s };
             inputs.forEach((el) => {
               const k = el.getAttribute('data-k');
-              const v = el.type === 'number' ? Number(el.value) : el.value;
+              const v = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
               next[k] = v;
             });
             api.storage.set('pokerSettings', next);
@@ -975,6 +1012,10 @@
             clientState = host.publicState();
             myHole = [];
             await paint();
+            // Öffne das Spiel-Fenster automatisch
+            try {
+              await window.bluetalk?.poker?.openGameWindow?.();
+            } catch {}
           })();
         };
         return;
@@ -1035,8 +1076,8 @@
           ${
             inGame
               ? `<p class="poker-plugin-sub" style="margin:0 0 10px;line-height:1.5">
-                  <strong>Poker-Fenster</strong> — Board, Einsätze und Aktionen sind im separaten Spiel-Fenster.
-                  Falls es nicht sichtbar ist: erneut <strong>Hand starten</strong> oder die App im Taskbar prüfen.
+                  <strong>Poker-Fenster</strong> — Das Spiel läuft im separaten Fenster.
+                  <button type="button" class="poker-btn poker-btn-primary" id="poker-open-window" style="margin-left:8px">Fenster öffnen</button>
                 </p>
                 <div class="poker-msg">Pot: ${view.pot ?? 0} · Hand #${view.handNumber ?? 0}</div>`
               : `<p class="poker-plugin-sub" style="margin:0">Lobby — Spieler am Tisch:</p>`
@@ -1102,6 +1143,14 @@
         }
       }
 
+      // Öffne Spiel-Fenster Button
+      const openWinBtn = panels.querySelector('#poker-open-window');
+      if (openWinBtn) {
+        openWinBtn.onclick = () => {
+          void openGameWindowIfNeeded();
+        };
+      }
+
       const leave = panels.querySelector('#poker-leave');
       if (leave) {
         leave.onclick = () => {
@@ -1145,18 +1194,50 @@
     };
   }
 
+  // Handle actions from game window
   if (window.bluetalk?.poker?.onFromChild) {
     window.bluetalk.poker.onFromChild((payload) => {
-      if (!payload || payload.type !== 'action' || !payload.action) return;
+      if (!payload) return;
+      
       const pid = pokerSelfPeerId;
-      if (hostRef) {
-        hostRef.applyAction(pid, payload.action);
-      } else if (clientState?.hostPeerId && clientState?.tableId) {
-        sendWire(clientState.hostPeerId, {
-          wire: 'action',
-          tableId: clientState.tableId,
-          action: payload.action,
-        });
+      
+      if (payload.type === 'action' && payload.action) {
+        if (hostRef) {
+          hostRef.applyAction(pid, payload.action);
+        } else if (clientState?.hostPeerId && clientState?.tableId) {
+          sendWire(clientState.hostPeerId, {
+            wire: 'action',
+            tableId: clientState.tableId,
+            action: payload.action,
+          });
+        }
+      } else if (payload.type === 'host_start') {
+        if (hostRef) {
+          hostRef.startHand();
+        }
+      } else if (payload.type === 'leave') {
+        if (hostRef) {
+          broadcastWire({ wire: 'leave', tableId: hostRef.tableId }, hostRef.publicState().players.map((p) => p.peerId));
+          hostRef.destroy();
+          hostRef = null;
+          host = null;
+        } else if (clientState?.hostPeerId) {
+          sendWire(clientState.hostPeerId, { wire: 'leave', tableId: clientState.tableId });
+        }
+        clientState = null;
+        myHole = [];
+      } else if (payload.type === 'add_bot') {
+        if (hostRef) {
+          hostRef.addDebugBot();
+        }
+      } else if (payload.type === 'remove_bot') {
+        if (hostRef) {
+          hostRef.removeDebugBot();
+        }
+      } else if (payload.type === 'update_settings' && payload.settings) {
+        if (hostRef) {
+          hostRef.updateSettings(payload.settings);
+        }
       }
     });
   }
