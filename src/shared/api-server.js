@@ -97,7 +97,9 @@ class APIServer {
           });
           res.write('event: connected\ndata: {"status":"ok"}\n\n');
           this.sseClients.add(res);
-          req.on('close', () => this.sseClients.delete(res));
+          const removeClient = () => this.sseClients.delete(res);
+          req.on('close', removeClient);
+          res.on('error', removeClient);
           return;
         }
 
@@ -187,18 +189,23 @@ class APIServer {
     });
   }
 
-  stop() {
+  stop(callback) {
     for (const client of this.sseClients) {
-      client.end();
-    }
-    this.sseClients.clear();
-    if (this.server) {
       try {
-        this.server.close();
+        client.end();
       } catch {
         /* ignore */
       }
+    }
+    this.sseClients.clear();
+    if (this.server) {
+      const srv = this.server;
       this.server = null;
+      srv.close((err) => {
+        if (callback) callback(err);
+      });
+    } else if (callback) {
+      callback();
     }
   }
 }

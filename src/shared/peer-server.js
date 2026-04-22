@@ -395,6 +395,14 @@ class PeerServer extends EventEmitter {
 
       this.discoverySocket.on('error', (err) => {
         console.warn('[Discovery] Socket error:', err.message);
+        // Attempt to recreate the socket on critical errors
+        if (err.code === 'EADDRINUSE' || err.code === 'EACCES') {
+          console.warn('[Discovery] Fatal socket error, will retry on next start()');
+          try {
+            this.discoverySocket.close();
+          } catch {}
+          this.discoverySocket = null;
+        }
       });
 
       this.discoverySocket.bind(DISCOVERY_PORT, () => {
@@ -548,7 +556,8 @@ class PeerServer extends EventEmitter {
       throw new Error('No peer endpoint available');
     }
 
-    const pendingKey = descriptor.peerId || candidates.map((candidate) => `${candidate.host}:${candidate.port}`).join('|');
+    // Use peerId as primary dedup key; fallback to normalized host list
+    const pendingKey = descriptor.peerId || candidates.map((candidate) => `${candidate.host}:${candidate.port}`).sort().join('|');
     if (this._pendingConnections.has(pendingKey)) {
       return this._pendingConnections.get(pendingKey);
     }
@@ -616,6 +625,11 @@ class PeerServer extends EventEmitter {
       req.on('upgrade', (res, socket) => {
         let peerId = descriptor.peerId || null;
 
+        socket.setTimeout(30000);
+        socket.on('timeout', () => {
+          socket.destroy();
+        });
+
         this._wsSend(socket, JSON.stringify({
           type: 'handshake',
           peerId: this.id,
@@ -678,7 +692,15 @@ class PeerServer extends EventEmitter {
         });
 
         const cleanup = () => {
-          if (!peerId) return;
+          if (!peerId) {
+            // If handshake never completed, ensure pending connection is cleared
+            this._pendingConnections.forEach((value, key) => {
+              if (value === pendingPromise) {
+                this._pendingConnections.delete(key);
+              }
+            });
+            return;
+          }
           const currentPeer = this.peers.get(peerId);
           if (currentPeer?.socket !== socket) return;
           this.peers.delete(peerId);
@@ -831,7 +853,7 @@ class PeerServer extends EventEmitter {
         socket._bluetalkWsFragLen += decoded.payload.length;
         if (socket._bluetalkWsFragLen > MAX_WEBSOCKET_PAYLOAD_BYTES) {
           // Accumulated fragments too large — discard
-          socket._bluetalkWsFragBufs = null;
+          socket._bluetalkWsFragBufs = [];
           socket._bluetalkWsFragLen = 0;
         }
         continue;
@@ -1018,6 +1040,10 @@ class PeerServer extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       http.get(`http://${host}:${port}/bt/files/${fileId}`, (res) => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          reject(new Error(`Peer returned HTTP ${res.statusCode}`));
+          return;
+        }
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () => {

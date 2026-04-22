@@ -40,6 +40,10 @@ class Store {
         await fs.promises.writeFile(this.path, JSON.stringify(this.data, null, 2), 'utf-8');
       } catch (e) {
         console.error('Store save error:', e);
+        // Mark dirty again so we retry on next schedule
+        this._dirty = true;
+        // Brief backoff to avoid tight error loops
+        await new Promise((r) => setTimeout(r, 250));
       }
     }
   }

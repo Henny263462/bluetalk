@@ -919,7 +919,9 @@ export default function ChatsPage() {
       } catch {
         /* Peer weiter offline — kein Toast */
       } finally {
-        busy = false;
+        if (!cancelled) {
+          busy = false;
+        }
       }
     };
     void attempt();

@@ -542,13 +542,18 @@ function restartApiServerIfPortChanged() {
   if (lastApiServerPort !== null && nextPort === lastApiServerPort) {
     return;
   }
-  try {
-    apiServer.stop();
-    apiServer.start(nextPort);
-    lastApiServerPort = nextPort;
-  } catch (e) {
-    console.error('API server restart error:', e);
-  }
+  apiServer.stop((err) => {
+    if (err) {
+      console.error('API server stop error:', err);
+    }
+    try {
+      apiServer.start(nextPort);
+      lastApiServerPort = nextPort;
+    } catch (e) {
+      console.error('API server restart error:', e);
+      lastApiServerPort = null;
+    }
+  });
 }
 
 function handleSettingsMutation() {
